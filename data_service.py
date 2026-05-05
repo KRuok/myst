@@ -198,6 +198,32 @@ async def _run_sync(fn, *args):
     return await loop.run_in_executor(None, fn, *args)
 
 
+async def warm_zt_cache(days: int = 35) -> None:
+    """
+    Background task: pre-fetch ZT pool data for the past `days` trading days.
+    Historical dates are permanently cached, so already-cached dates are skipped
+    instantly. Only uncached dates trigger an AKShare call.
+    """
+    today = datetime.date.today().strftime("%Y%m%d")
+    dates = get_previous_n_trading_dates(today, days)
+    sem = asyncio.Semaphore(3)   # gentler than MAX_PARALLEL_FETCHES for warmup
+
+    async def fetch_one(d: str) -> None:
+        # Skip if already cached — _read_cache returns non-None for valid cache
+        path = os.path.join(CACHE_DIR, f"zt_{d}.json")
+        if os.path.exists(path):
+            return
+        async with sem:
+            try:
+                await fetch_zt_data(d)
+                logger.info("Cache warmed: %s", d)
+            except Exception as e:
+                logger.warning("Cache warm failed for %s: %s", d, e)
+
+    await asyncio.gather(*[fetch_one(d) for d in dates])
+    logger.info("ZT cache warmup done (%d dates checked)", len(dates))
+
+
 # ---------------------------------------------------------------------------
 # Public fetch functions
 # ---------------------------------------------------------------------------

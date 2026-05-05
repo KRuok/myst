@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -26,6 +27,7 @@ from data_service import (
     fetch_stock_kline,
     compute_tier_promotion_stats,
     compute_feature_backtest,
+    warm_zt_cache,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +37,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs(CACHE_DIR, exist_ok=True)
+    asyncio.create_task(warm_zt_cache(35))   # background; non-blocking
     yield
 
 
@@ -197,3 +200,17 @@ async def feature_backtest_endpoint(
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     return data
+
+
+@app.get("/api/cache-status")
+async def cache_status():
+    """Returns count of cached ZT pool dates (used to track warmup progress)."""
+    try:
+        files = [
+            f[3:-5] for f in os.listdir(CACHE_DIR)
+            if f.startswith("zt_") and f.endswith(".json")
+        ]
+        files.sort(reverse=True)
+        return {"count": len(files), "latest": files[:5] if files else []}
+    except Exception:
+        return {"count": 0, "latest": []}

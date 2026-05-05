@@ -895,26 +895,37 @@ function setLoading(on) {
 // ─────────────────────────────────────────────────────────────────
 async function loadBacktest(win) {
   win = win || parseInt(document.getElementById('backtest-window').value) || 20;
-  document.getElementById('bt-loading').classList.remove('hidden');
-  document.getElementById('bt-loading').textContent = '加载中…';
+  const loading = document.getElementById('bt-loading');
+  loading.classList.remove('hidden');
+  loading.textContent = '加载中…';
   document.getElementById('bt-meta').classList.add('hidden');
   document.getElementById('bt-dims').classList.add('hidden');
   try {
     const data = await fetch(`/api/feature-backtest/${currentDate}?window=${win}`)
       .then(r => r.json());
-    renderBacktest(data);
+    renderBacktest(data, win);
   } catch {
-    document.getElementById('bt-loading').textContent = '加载失败';
+    loading.textContent = '加载失败';
   }
 }
 
-function renderBacktest(data) {
+async function renderBacktest(data, win) {
   document.getElementById('bt-loading').classList.add('hidden');
   const meta = document.getElementById('bt-meta');
   const dims = document.getElementById('bt-dims');
 
   if (!data || !data.total) {
-    meta.textContent = '暂无足够历史数据';
+    // Show warmup status so user knows data is being fetched
+    try {
+      const status = await fetch('/api/cache-status').then(r => r.json());
+      const need = (win || 20) * 2 + 3;
+      meta.innerHTML = status.count < need
+        ? `历史缓存 ${status.count} 天，回测需要约 ${need} 天。` +
+          `后台正在获取中，稍后点击 <button class="bt-retry-btn" onclick="loadBacktest()">重新加载</button> 即可。`
+        : `数据不足，请尝试缩短窗口或 <button class="bt-retry-btn" onclick="loadBacktest()">重新加载</button>`;
+    } catch {
+      meta.innerHTML = `暂无历史数据，<button class="bt-retry-btn" onclick="loadBacktest()">重新加载</button>`;
+    }
     meta.classList.remove('hidden');
     return;
   }

@@ -442,6 +442,10 @@ footer {
 .bt-bar-mid  { background:var(--orange); }
 .bt-bar-low  { background:#94a3b8; }
 
+/* ── Backtest retry button ── */
+.bt-retry-btn { background:none; border:1px solid var(--primary); color:var(--primary); border-radius:4px; padding:1px 8px; font-size:12px; cursor:pointer; }
+.bt-retry-btn:hover { background:var(--primary); color:#fff; }
+
 /* ── Per-stock predicted rate (under score badge in main table) ── */
 .pred-rate { font-size:10px; font-weight:700; text-align:center; line-height:1; margin-top:3px; }
 .pred-high { color:var(--red); }
