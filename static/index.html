@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>涨停板行情</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>涨停板行情</h1>
+      <div class="date-controls">
+        <input type="date" id="date-picker" />
+        <button id="load-btn">查询</button>
+        <span id="status-msg"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Sentiment cards -->
+  <section class="sentiment-bar" id="sentiment-bar">
+    <div class="card" id="card-total">
+      <div class="card-label">今日涨停</div>
+      <div class="card-value" id="val-total">—</div>
+    </div>
+    <div class="card" id="card-promotion">
+      <div class="card-label">涨停晋级率</div>
+      <div class="card-value" id="val-promotion">—</div>
+      <div class="card-sub" id="sub-promotion"></div>
+    </div>
+    <div class="card" id="card-broke">
+      <div class="card-label">炸板率</div>
+      <div class="card-value" id="val-broke">—</div>
+      <div class="card-sub" id="sub-broke"></div>
+    </div>
+  </section>
+
+  <!-- Consecutive tier view -->
+  <section class="tiers-section">
+    <div class="tiers-label">连板梯队</div>
+    <div class="tiers-row" id="tiers-row">
+      <span class="tier-pill tier-all active" data-consecutive="all">全部</span>
+    </div>
+  </section>
+
+  <!-- Main table filters -->
+  <section class="filter-bar">
+    <input type="text" id="search-box" placeholder="搜索代码 / 名称 / 行业…" />
+    <select id="industry-filter"><option value="">全部行业</option></select>
+    <label class="check-label">
+      <input type="checkbox" id="hide-consecutive" />
+      隐藏连板股
+    </label>
+    <span id="count-display" class="count-display"></span>
+  </section>
+
+  <!-- Main table -->
+  <div class="table-wrapper">
+    <div id="loading-overlay" class="loading-overlay hidden">
+      <div class="spinner"></div>
+      <span>加载中…</span>
+    </div>
+    <div id="empty-msg" class="empty-msg hidden">当日无涨停数据</div>
+    <table id="zt-table">
+      <thead>
+        <tr>
+          <th data-col="score" class="sortable">评分</th>
+          <th data-col="code">代码</th>
+          <th data-col="name">名称</th>
+          <th data-col="first_time" class="sortable">首封时间</th>
+          <th data-col="volume" class="sortable">成交额</th>
+          <th data-col="seal_fund" class="sortable">封板资金</th>
+          <th data-col="break_count" class="sortable">炸板次数</th>
+          <th data-col="consecutive" class="sortable">连板数</th>
+          <th data-col="industry">行业</th>
+          <th data-col="zt_stat">涨停统计</th>
+          <th data-col="week1_count" class="sortable">近一周</th>
+          <th data-col="week2_count" class="sortable">近两周</th>
+          <th data-col="week3_count" class="sortable">近三周</th>
+          <th data-col="month1_count" class="sortable">近一月</th>
+        </tr>
+      </thead>
+      <tbody id="zt-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Strong stocks section -->
+  <section class="strong-section">
+    <div class="strong-header" id="strong-toggle">
+      <span>昨日涨停今日强势股</span>
+      <span class="toggle-arrow" id="strong-arrow">▶</span>
+    </div>
+    <div id="strong-content" class="strong-content hidden">
+      <div id="strong-loading" class="strong-loading hidden">加载中…</div>
+      <div id="strong-empty" class="hidden" style="padding:12px 16px;color:var(--text-secondary)">暂无数据</div>
+      <table id="strong-table" class="hidden">
+        <thead>
+          <tr>
+            <th>代码</th>
+            <th>名称</th>
+            <th>今日涨跌幅</th>
+            <th>最新价</th>
+            <th>行业</th>
+            <th>涨停统计</th>
+          </tr>
+        </thead>
+        <tbody id="strong-tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <span>数据来源：东方财富 &nbsp;·&nbsp; 仅供参考，不构成投资建议</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
