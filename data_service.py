@@ -1,16 +1,10 @@
-import sys
-import types
 import json
 import os
 import asyncio
 import datetime
 import logging
 
-# AKShare ships without a 'jsonpath' package on this environment; inject a stub
-if "jsonpath" not in sys.modules:
-    sys.modules["jsonpath"] = types.ModuleType("jsonpath")
-
-import akshare as ak
+import akshare as ak  # config.py already injected the jsonpath stub
 import pandas as pd
 
 from config import CACHE_DIR, PERIODS, MAX_PARALLEL_FETCHES

@@ -1,4 +1,12 @@
 import os
+import sys
+import types
+
+# AKShare jsonpath stub must be injected before any akshare import
+if "jsonpath" not in sys.modules:
+    sys.modules["jsonpath"] = types.ModuleType("jsonpath")
+
+import akshare as _ak
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 
@@ -10,7 +18,10 @@ PERIODS = {
     "month1": 20,
 }
 
-AKSHARE_CALENDAR_PATH = "/usr/local/lib/python3.11/dist-packages/akshare/file_fold/calendar.json"
+# Dynamically locate the bundled trading calendar (works on any OS / install path)
+AKSHARE_CALENDAR_PATH = os.path.join(
+    os.path.dirname(_ak.__file__), "file_fold", "calendar.json"
+)
 
 FETCH_TIMEOUT = 20
 
