@@ -9,6 +9,7 @@ let tierFilter   = 'all';
 let auctionOnly  = false;
 let capFilter    = 'all';          // Feature 4: market cap tier
 let leaderCodes  = new Set();      // Feature 6: leader detection
+let backtestCross = null;          // cross-dim lookup from rolling backtest
 let strongLoaded = false;
 let analysisLoadedFor = '';
 
@@ -70,6 +71,22 @@ function capTier(circ_cap) {
   if (v < 5e9)  return 'small';
   if (v < 2e10) return 'mid';
   return 'large';
+}
+
+// Bucket helpers matching backend _seal_bucket / _consec_bucket
+function sealBucket(ft) {
+  if (!ft) return '盘中';
+  const t = parseInt(ft);
+  if (isNaN(t)) return '盘中';
+  if (t < 93100)  return '竞价';
+  if (t < 100000) return '早盘';
+  return '盘中';
+}
+function consecBucket(c) {
+  const n = parseInt(c) || 1;
+  if (n === 1) return '首板';
+  if (n === 2) return '二板';
+  return '三板+';
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -169,6 +186,7 @@ async function loadData(dateStr) {
   currentDate = dateStr;
   strongLoaded = false;
   analysisLoadedFor = '';
+  backtestCross = null;
 
   setLoading(true);
   document.getElementById('status-msg').textContent = '';
@@ -355,7 +373,18 @@ function renderTable() {
       <td><button class="star-btn ${watched?'starred':''}"
             data-code="${r.code}" data-name="${r.name||''}">
             ${watched?'★':'☆'}</button></td>
-      <td><span class="score-badge ${scoreClass(sc)}">${sc}</span></td>
+      <td>${(() => {
+        let pred = '';
+        if (backtestCross) {
+          const k = `${sealBucket(r.first_time)}|${consecBucket(r.consecutive)}`;
+          const p = backtestCross[k];
+          if (p && p.n >= 5) {
+            const pc = p.t1_zt_rate >= 50 ? 'pred-high' : p.t1_zt_rate >= 30 ? 'pred-mid' : 'pred-low';
+            pred = `<div class="pred-rate ${pc}">↑${p.t1_zt_rate}%</div>`;
+          }
+        }
+        return `<span class="score-badge ${scoreClass(sc)}">${sc}</span>${pred}`;
+      })()}</td>
       <td>${codeLink}</td>
       <td>${r.name||'—'}</td>
       <td>${timeHtml}</td>
@@ -511,12 +540,14 @@ async function maybeLoadAnalysis() {
   const [trendRes, nextdayRes, tierPromoRes] = await Promise.allSettled([
     fetch(`/api/market-trend/${currentDate}`).then(r => r.json()),
     fetch(`/api/nextday-stats/${currentDate}`).then(r => r.json()),
-    fetch(`/api/tier-promotion/${currentDate}`).then(r => r.json()),  // Feature 5
+    fetch(`/api/tier-promotion/${currentDate}`).then(r => r.json()),
   ]);
 
-  if (trendRes.status === 'fulfilled')    renderTrendChart(trendRes.value.trend);
-  if (nextdayRes.status === 'fulfilled')  renderNextdayStats(nextdayRes.value);
-  if (tierPromoRes.status === 'fulfilled') renderTierPromotion(tierPromoRes.value);  // Feature 5
+  if (trendRes.status === 'fulfilled')     renderTrendChart(trendRes.value.trend);
+  if (nextdayRes.status === 'fulfilled')   renderNextdayStats(nextdayRes.value);
+  if (tierPromoRes.status === 'fulfilled') renderTierPromotion(tierPromoRes.value);
+
+  loadBacktest();   // loads independently; window selector can re-trigger
 }
 
 // Chart: 市场温度
@@ -860,6 +891,78 @@ function setLoading(on) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// ROLLING WINDOW BACKTEST
+// ─────────────────────────────────────────────────────────────────
+async function loadBacktest(win) {
+  win = win || parseInt(document.getElementById('backtest-window').value) || 20;
+  document.getElementById('bt-loading').classList.remove('hidden');
+  document.getElementById('bt-loading').textContent = '加载中…';
+  document.getElementById('bt-meta').classList.add('hidden');
+  document.getElementById('bt-dims').classList.add('hidden');
+  try {
+    const data = await fetch(`/api/feature-backtest/${currentDate}?window=${win}`)
+      .then(r => r.json());
+    renderBacktest(data);
+  } catch {
+    document.getElementById('bt-loading').textContent = '加载失败';
+  }
+}
+
+function renderBacktest(data) {
+  document.getElementById('bt-loading').classList.add('hidden');
+  const meta = document.getElementById('bt-meta');
+  const dims = document.getElementById('bt-dims');
+
+  if (!data || !data.total) {
+    meta.textContent = '暂无足够历史数据';
+    meta.classList.remove('hidden');
+    return;
+  }
+
+  meta.innerHTML =
+    `共 <strong>${data.total}</strong> 个样本 &nbsp;·&nbsp; ` +
+    `${fmtDate(data.date_from)} — ${fmtDate(data.date_to)}`;
+  meta.classList.remove('hidden');
+
+  // Store cross stats so renderTable() can annotate each stock
+  backtestCross = data.cross || null;
+
+  const dimDefs = [
+    { key: 'by_seal',   title: '按封板时间' },
+    { key: 'by_consec', title: '按连板数' },
+    { key: 'by_breaks', title: '按炸板次数' },
+  ];
+
+  dims.innerHTML = dimDefs.map(def => {
+    const rows = (data[def.key] || []).map(b => {
+      const r = b.t1_zt_rate;
+      const rc = r >= 50 ? 'high' : r >= 30 ? 'mid' : 'low';
+      return `<tr>
+        <td class="bt-label">${b.label}</td>
+        <td class="bt-n">${b.n}</td>
+        <td class="bt-rate bt-${rc}">${r}%</td>
+        <td class="bt-bar-cell">
+          <div class="bt-bar-wrap">
+            <div class="bt-bar bt-bar-${rc}" style="width:${Math.min(r,100)}%"></div>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+    return `<div class="bt-dim">
+      <div class="bt-dim-title">${def.title}</div>
+      <table class="bt-table">
+        <thead><tr><th>特征</th><th>样本</th><th>T+1晋级</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+  dims.classList.remove('hidden');
+
+  // Re-render main table to show predicted rates
+  renderTable();
+}
+
+// ─────────────────────────────────────────────────────────────────
 // BOOTSTRAP
 // ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -869,6 +972,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupStrongSection();
   setupModal();
   updateWatchlistBadge();
+  document.getElementById('backtest-window').addEventListener('change', e => {
+    loadBacktest(parseInt(e.target.value));
+  });
   try {
     const latest = await initDatePicker();
     await loadData(latest);

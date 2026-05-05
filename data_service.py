@@ -12,8 +12,14 @@ if "jsonpath" not in sys.modules:
 import akshare as ak
 import pandas as pd
 
+from collections import defaultdict
+
 from config import CACHE_DIR, PERIODS, MAX_PARALLEL_FETCHES
-from trading_calendar import get_previous_n_trading_dates, get_prev_trading_date
+from trading_calendar import (
+    get_previous_n_trading_dates,
+    get_prev_trading_date,
+    get_next_trading_date,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -431,8 +437,6 @@ async def fetch_stock_timeline(code: str, anchor_date: str, days: int = 30) -> l
 
 async def compute_nextday_stats(date_str: str) -> dict:
     """For each consecutive tier in today's pool, compute % that hit ZT again next day."""
-    from trading_calendar import get_next_trading_date
-
     next_date = get_next_trading_date(date_str)
     today_str = datetime.date.today().strftime("%Y%m%d")
 
@@ -589,3 +593,134 @@ async def compute_tier_promotion_stats(anchor_date: str, days: int = 30) -> list
             "days": days,
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# Feature-stratified rolling window backtest
+# ---------------------------------------------------------------------------
+
+def _seal_bucket(first_time) -> str:
+    try:
+        t = int(first_time or "999999")
+    except (ValueError, TypeError):
+        return "盘中"
+    if t < 93100:  return "竞价"
+    if t < 100000: return "早盘"
+    return "盘中"
+
+
+def _consec_bucket(consecutive) -> str:
+    try:
+        c = int(consecutive or 1)
+    except (ValueError, TypeError):
+        c = 1
+    if c == 1: return "首板"
+    if c == 2: return "二板"
+    return "三板+"
+
+
+def _break_bucket(break_count) -> str:
+    try:
+        b = int(break_count or 0)
+    except (ValueError, TypeError):
+        b = 0
+    if b == 0: return "0炸"
+    if b == 1: return "1炸"
+    return "2炸+"
+
+
+async def compute_feature_backtest(anchor_date: str, window: int = 20) -> dict:
+    """
+    Rolling window feature-stratified backtest (ZT pool data only, no K-line).
+
+    For each T0 day in the past `window` trading days, checks whether each
+    涨停 stock re-appeared in the T+1 ZT pool (proxy for a profitable next-day
+    trade).  Results are stratified by seal time, consecutive tier, and break
+    count, plus a cross-dimension lookup table keyed by "seal|consec".
+    """
+    today_str = datetime.date.today().strftime("%Y%m%d")
+
+    # Build (t0, t1) pairs where T+1 has already closed
+    raw_dates = get_previous_n_trading_dates(anchor_date, window + 3)
+    pairs: list[tuple[str, str]] = []
+    for d in raw_dates:
+        t1 = get_next_trading_date(d)
+        if t1 and t1 <= today_str:
+            pairs.append((d, t1))
+    pairs = pairs[-window:]
+
+    if not pairs:
+        return {"window": window, "total": 0}
+
+    needed: set[str] = set()
+    for t0, t1 in pairs:
+        needed.add(t0)
+        needed.add(t1)
+
+    sem = asyncio.Semaphore(MAX_PARALLEL_FETCHES)
+
+    async def fetch_safe(d: str):
+        async with sem:
+            try:
+                return d, await fetch_zt_data(d)
+            except Exception:
+                return d, []
+
+    zt_results = await asyncio.gather(*[fetch_safe(d) for d in needed])
+    zt_pools: dict[str, list] = dict(zt_results)
+
+    # Build flat outcome records
+    all_records: list[dict] = []
+    for t0, t1 in pairs:
+        t1_codes = {r["code"] for r in zt_pools.get(t1, []) if r.get("code")}
+        for r in zt_pools.get(t0, []):
+            code = r.get("code")
+            if not code:
+                continue
+            all_records.append({
+                "seal":   _seal_bucket(r.get("first_time")),
+                "consec": _consec_bucket(r.get("consecutive")),
+                "breaks": _break_bucket(r.get("break_count")),
+                "t1_hit": code in t1_codes,
+            })
+
+    if not all_records:
+        return {"window": window, "total": 0}
+
+    def agg(recs: list) -> dict:
+        n = len(recs)
+        hits = sum(1 for r in recs if r["t1_hit"])
+        return {"n": n, "t1_zt_rate": round(hits / n * 100, 1)}
+
+    ORDER = {
+        "seal":   ["竞价", "早盘", "盘中"],
+        "consec": ["首板", "二板", "三板+"],
+        "breaks": ["0炸", "1炸", "2炸+"],
+    }
+
+    def build_dim(key: str) -> list[dict]:
+        groups: dict[str, list] = defaultdict(list)
+        for r in all_records:
+            groups[r[key]].append(r)
+        return [
+            {"label": k, **agg(groups[k])}
+            for k in ORDER[key] if k in groups
+        ]
+
+    # Cross-dimension table "seal|consec" → stats (for per-stock lookup in UI)
+    cross_groups: dict[str, list] = defaultdict(list)
+    for r in all_records:
+        cross_groups[f"{r['seal']}|{r['consec']}"].append(r)
+    cross = {k: agg(v) for k, v in cross_groups.items()}
+
+    return {
+        "window":       window,
+        "anchor_date":  anchor_date,
+        "total":        len(all_records),
+        "date_from":    pairs[0][0],
+        "date_to":      pairs[-1][0],
+        "by_seal":      build_dim("seal"),
+        "by_consec":    build_dim("consec"),
+        "by_breaks":    build_dim("breaks"),
+        "cross":        cross,
+    }

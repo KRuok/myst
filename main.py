@@ -25,6 +25,7 @@ from data_service import (
     compute_nextday_stats,
     fetch_stock_kline,
     compute_tier_promotion_stats,
+    compute_feature_backtest,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -183,3 +184,16 @@ async def tier_promotion_endpoint(date: str, days: int = Query(default=30, ge=10
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"date": date, "days": days, "stats": data}
+
+
+@app.get("/api/feature-backtest/{date}")
+async def feature_backtest_endpoint(
+    date: str, window: int = Query(default=20, ge=10, le=40)
+):
+    if not is_trading_date(date):
+        raise HTTPException(status_code=400, detail={"error": "not_a_trading_date"})
+    try:
+        data = await compute_feature_backtest(date, window)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return data

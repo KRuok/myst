@@ -416,3 +416,34 @@ footer {
 
 /* ── K-line container ── */
 #kline-container { height: 380px; border-radius: var(--radius); overflow: hidden; }
+
+/* ── Backtest card ── */
+.bt-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px; }
+.bt-controls { font-size:13px; color:var(--text-secondary); }
+.bt-controls select { font-size:13px; padding:2px 4px; border:1px solid var(--border); border-radius:4px; background:var(--surface); color:var(--text); }
+.bt-meta { font-size:12px; color:var(--text-secondary); margin-bottom:12px; }
+.bt-dims { display:flex; gap:16px; flex-wrap:wrap; }
+.bt-dim { flex:1; min-width:180px; }
+.bt-dim-title { font-size:12px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px; }
+.bt-table { width:100%; border-collapse:collapse; font-size:13px; }
+.bt-table th { text-align:left; padding:4px 6px; font-size:11px; color:var(--text-secondary); border-bottom:1px solid var(--border); font-weight:500; }
+.bt-table td { padding:5px 6px; border-bottom:1px solid var(--border); }
+.bt-table tr:last-child td { border-bottom:none; }
+.bt-label { color:var(--text); font-weight:500; }
+.bt-n { color:var(--text-secondary); font-size:12px; }
+.bt-rate { font-weight:700; min-width:42px; }
+.bt-high { color: var(--red); }
+.bt-mid  { color: var(--orange); }
+.bt-low  { color: var(--text-secondary); }
+.bt-bar-cell { width:80px; padding:5px 6px 5px 2px; }
+.bt-bar-wrap { background:var(--border); border-radius:2px; height:6px; overflow:hidden; }
+.bt-bar { height:100%; border-radius:2px; transition:width .3s; }
+.bt-bar-high { background:var(--red); }
+.bt-bar-mid  { background:var(--orange); }
+.bt-bar-low  { background:#94a3b8; }
+
+/* ── Per-stock predicted rate (under score badge in main table) ── */
+.pred-rate { font-size:10px; font-weight:700; text-align:center; line-height:1; margin-top:3px; }
+.pred-high { color:var(--red); }
+.pred-mid  { color:var(--orange); }
+.pred-low  { color:var(--text-secondary); }

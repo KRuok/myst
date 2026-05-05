@@ -145,6 +145,22 @@
     </div>
   </div>
 
+  <div class="analysis-card" style="margin-top:12px">
+    <div class="bt-header">
+      <h3 class="analysis-title" style="margin:0">打板特征回测</h3>
+      <div class="bt-controls">
+        近 <select id="backtest-window">
+          <option value="10">10</option>
+          <option value="20" selected>20</option>
+          <option value="30">30</option>
+        </select> 个交易日 &nbsp;·&nbsp; T+1再涨停率
+      </div>
+    </div>
+    <div id="bt-loading" class="section-loading">加载中…</div>
+    <div id="bt-meta" class="bt-meta hidden"></div>
+    <div id="bt-dims" class="bt-dims hidden"></div>
+  </div>
+
 </div><!-- /tab-analysis -->
 
 <!-- ===== TAB: 自选股 ===== -->
