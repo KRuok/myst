@@ -19,7 +19,6 @@
   </div>
 </header>
 
-<!-- Tab navigation -->
 <nav class="tab-nav">
   <button class="tab-btn active" data-tab="table">涨停列表</button>
   <button class="tab-btn" data-tab="analysis">市场分析</button>
@@ -57,6 +56,12 @@
     <input type="text" id="search-box" placeholder="搜索代码 / 名称 / 行业…" />
     <select id="industry-filter"><option value="">全部行业</option></select>
     <button class="filter-toggle" id="auction-filter" data-active="false">竞价封板</button>
+    <div class="cap-filters">
+      <button class="cap-btn active" data-cap="all">全部</button>
+      <button class="cap-btn" data-cap="small">小盘&lt;50亿</button>
+      <button class="cap-btn" data-cap="mid">中盘50-200亿</button>
+      <button class="cap-btn" data-cap="large">大盘&gt;200亿</button>
+    </div>
     <label class="check-label"><input type="checkbox" id="hide-consecutive" /> 隐藏连板股</label>
     <span id="count-display" class="count-display"></span>
   </section>
@@ -113,30 +118,30 @@
 <div id="tab-analysis" class="tab-pane hidden">
 
   <div class="analysis-grid">
-
     <div class="analysis-card">
       <h3 class="analysis-title">市场温度趋势（近20日）</h3>
-      <div class="chart-wrap">
-        <canvas id="trend-chart"></canvas>
-      </div>
+      <div class="chart-wrap"><canvas id="trend-chart"></canvas></div>
       <div id="trend-loading" class="section-loading">加载中…</div>
     </div>
-
     <div class="analysis-card">
       <h3 class="analysis-title">板块热度</h3>
-      <div class="chart-wrap">
-        <canvas id="sector-chart"></canvas>
-      </div>
+      <div class="chart-wrap"><canvas id="sector-chart"></canvas></div>
       <div id="sector-empty" class="section-loading hidden">暂无数据，请先切换到涨停列表查询</div>
     </div>
-
   </div>
 
-  <div class="analysis-card nextday-card">
-    <h3 class="analysis-title">次日打板胜率（历史回测）</h3>
-    <div id="nextday-loading" class="section-loading">加载中…</div>
-    <div id="nextday-na" class="section-loading hidden">今日数据，次日尚未收盘，暂无统计</div>
-    <div id="nextday-stats" class="nextday-grid hidden"></div>
+  <div class="analysis-row">
+    <div class="analysis-card half-card">
+      <h3 class="analysis-title">次日再涨停率（当日回测）</h3>
+      <div id="nextday-loading" class="section-loading">加载中…</div>
+      <div id="nextday-na" class="section-loading hidden">今日数据尚未收盘，暂无统计</div>
+      <div id="nextday-stats" class="nextday-grid hidden"></div>
+    </div>
+    <div class="analysis-card half-card">
+      <h3 class="analysis-title">连板晋级率统计（近30个交易日）</h3>
+      <div id="tier-promo-loading" class="section-loading">加载中…</div>
+      <div id="tier-promo-grid" class="nextday-grid hidden"></div>
+    </div>
   </div>
 
 </div><!-- /tab-analysis -->
@@ -157,7 +162,7 @@
       <tbody id="watchlist-tbody"></tbody>
     </table>
   </div>
-</div><!-- /tab-watchlist -->
+</div>
 
 <!-- ===== 股票详情 Modal ===== -->
 <div id="stock-modal" class="modal-overlay hidden">
@@ -170,13 +175,28 @@
       <button id="modal-close" class="modal-close">✕</button>
     </div>
     <div class="modal-body">
-      <div class="timeline-legend">
-        <span class="legend-dot" style="background:var(--red)"></span>涨停
-        <span class="legend-dot" style="background:#e2e8f0;margin-left:12px"></span>未涨停
+      <div class="modal-tab-nav">
+        <button class="modal-tab-btn active" data-modal-tab="kline">K线图</button>
+        <button class="modal-tab-btn" data-modal-tab="timeline">涨停时间轴</button>
       </div>
-      <div id="timeline-loading" class="section-loading">加载中…</div>
-      <div id="timeline-grid" class="timeline-grid"></div>
-      <div id="timeline-stats" class="timeline-stats"></div>
+
+      <!-- K线图 tab -->
+      <div id="modal-tab-kline" class="modal-tab-pane">
+        <div id="kline-loading" class="section-loading">加载中…</div>
+        <div id="kline-container"></div>
+      </div>
+
+      <!-- 时间轴 tab -->
+      <div id="modal-tab-timeline" class="modal-tab-pane hidden">
+        <div class="timeline-legend">
+          <span class="legend-dot" style="background:#991b1b"></span>竞价封
+          <span class="legend-dot" style="background:var(--red);margin-left:8px"></span>涨停
+          <span class="legend-dot" style="background:#e2e8f0;margin-left:8px"></span>未涨停
+        </div>
+        <div id="timeline-loading" class="section-loading hidden">加载中…</div>
+        <div id="timeline-grid" class="timeline-grid"></div>
+        <div id="timeline-stats" class="timeline-stats"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -184,6 +204,7 @@
 <footer>数据来源：东方财富 &nbsp;·&nbsp; 仅供参考，不构成投资建议</footer>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -23,6 +23,8 @@ from data_service import (
     compute_market_trend,
     fetch_stock_timeline,
     compute_nextday_stats,
+    fetch_stock_kline,
+    compute_tier_promotion_stats,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -159,3 +161,25 @@ async def nextday_stats_endpoint(date: str):
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     return data
+
+
+@app.get("/api/kline/{code}/{date}")
+async def kline_data(code: str, date: str, days: int = Query(default=40, ge=10, le=120)):
+    if not is_trading_date(date):
+        raise HTTPException(status_code=400, detail={"error": "not_a_trading_date"})
+    try:
+        data = await fetch_stock_kline(code, date, days)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"code": code, "date": date, "kline": data}
+
+
+@app.get("/api/tier-promotion/{date}")
+async def tier_promotion_endpoint(date: str, days: int = Query(default=30, ge=10, le=60)):
+    if not is_trading_date(date):
+        raise HTTPException(status_code=400, detail={"error": "not_a_trading_date"})
+    try:
+        data = await compute_tier_promotion_stats(date, days)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"date": date, "days": days, "stats": data}

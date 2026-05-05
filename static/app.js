@@ -7,11 +7,14 @@ let currentDate  = '';
 let sortState    = { col: 'score', dir: 'desc' };
 let tierFilter   = 'all';
 let auctionOnly  = false;
+let capFilter    = 'all';          // Feature 4: market cap tier
+let leaderCodes  = new Set();      // Feature 6: leader detection
 let strongLoaded = false;
 let analysisLoadedFor = '';
 
 let trendChartInst  = null;
 let sectorChartInst = null;
+let klineChart      = null;        // Feature 7: lightweight-charts instance
 
 // ─────────────────────────────────────────────────────────────────
 // FORMATTERS
@@ -56,8 +59,46 @@ function consecClass(n) {
   return 'c1';
 }
 function isAuction(first_time) {
-  if (!first_time) return false;
-  return parseInt(first_time) <= 92559;
+  return !!first_time && parseInt(first_time) <= 92559;
+}
+
+// Feature 4: market cap tier
+function capTier(circ_cap) {
+  if (!circ_cap) return 'unknown';
+  const v = parseFloat(circ_cap);
+  if (isNaN(v)) return 'unknown';
+  if (v < 5e9)  return 'small';
+  if (v < 2e10) return 'mid';
+  return 'large';
+}
+
+// ─────────────────────────────────────────────────────────────────
+// FEATURE 6: LEADER DETECTION
+// ─────────────────────────────────────────────────────────────────
+function computeLeaders(records) {
+  const byIndustry = {};
+  records.forEach(r => {
+    if (!r.industry) return;
+    (byIndustry[r.industry] = byIndustry[r.industry] || []).push(r);
+  });
+
+  const leaders = new Set();
+  Object.values(byIndustry).forEach(stocks => {
+    if (stocks.length < 2) return;   // need 2+ in sector to crown a leader
+    const sorted = [...stocks].sort((a, b) => {
+      // Primary: most consecutive boards
+      const dc = (b.consecutive || 1) - (a.consecutive || 1);
+      if (dc !== 0) return dc;
+      // Secondary: earliest seal (smaller number = earlier)
+      const ta = parseInt(a.first_time || '999999');
+      const tb = parseInt(b.first_time || '999999');
+      if (ta !== tb) return ta - tb;
+      // Tertiary: higher score
+      return (b.score || 0) - (a.score || 0);
+    });
+    leaders.add(sorted[0].code);
+  });
+  return leaders;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -70,14 +111,12 @@ function getWatchlist() {
 function isWatched(code) { return code in getWatchlist(); }
 function toggleWatchlist(code, name) {
   const wl = getWatchlist();
-  if (wl[code]) delete wl[code];
-  else wl[code] = name;
+  if (wl[code]) delete wl[code]; else wl[code] = name;
   localStorage.setItem('zt_watchlist', JSON.stringify(wl));
   updateWatchlistBadge();
   renderTable();
-  if (document.getElementById('tab-watchlist').classList.contains('active')) {
+  if (document.getElementById('tab-watchlist').classList.contains('active'))
     renderWatchlistTab();
-  }
 }
 function updateWatchlistBadge() {
   const count = Object.keys(getWatchlist()).length;
@@ -129,7 +168,7 @@ async function initDatePicker() {
 async function loadData(dateStr) {
   currentDate = dateStr;
   strongLoaded = false;
-  analysisLoadedFor = '';  // reset so analysis refreshes for new date
+  analysisLoadedFor = '';
 
   setLoading(true);
   document.getElementById('status-msg').textContent = '';
@@ -149,25 +188,22 @@ async function loadData(dateStr) {
 
   if (ztRes.status === 'rejected') {
     const detail = ztRes.reason?.detail;
-    if (detail?.error === 'not_a_trading_date') {
-      document.getElementById('status-msg').textContent =
-        `非交易日，最近交易日：${fmtDate(detail.nearest)}`;
-    } else {
-      document.getElementById('status-msg').textContent = '数据加载失败，请稍后重试';
-    }
-    allRecords = [];
-    renderTiers([]);
-    renderTable();
+    document.getElementById('status-msg').textContent =
+      detail?.error === 'not_a_trading_date'
+        ? `非交易日，最近交易日：${fmtDate(detail.nearest)}`
+        : '数据加载失败，请稍后重试';
+    allRecords = []; leaderCodes = new Set();
+    renderTiers([]); renderTable();
     return;
   }
 
   const data = ztRes.value;
   allRecords = data.records || [];
+  leaderCodes = computeLeaders(allRecords);  // Feature 6
 
-  if (allRecords.length === 0) {
+  if (!allRecords.length) {
     document.getElementById('empty-msg').classList.remove('hidden');
-    renderTiers([]);
-    renderTable();
+    renderTiers([]); renderTable();
     return;
   }
 
@@ -175,10 +211,8 @@ async function loadData(dateStr) {
   populateIndustryFilter();
   renderTable();
 
-  // If analysis tab is already visible, reload it
-  if (document.querySelector('.tab-btn[data-tab="analysis"]').classList.contains('active')) {
+  if (document.querySelector('.tab-btn[data-tab="analysis"]').classList.contains('active'))
     maybeLoadAnalysis();
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -186,7 +220,6 @@ async function loadData(dateStr) {
 // ─────────────────────────────────────────────────────────────────
 function renderSentiment(data) {
   document.getElementById('val-total').textContent = data.total_zt ?? '—';
-
   if (data.promotion_rate != null) {
     const pr = data.promotion_rate;
     const el = document.getElementById('val-promotion');
@@ -195,7 +228,6 @@ function renderSentiment(data) {
     document.getElementById('sub-promotion').textContent =
       data.prev_date ? `前日：${fmtDate(data.prev_date)}` : '';
   }
-
   if (data.broke_rate != null) {
     const br = data.broke_rate;
     const el = document.getElementById('val-broke');
@@ -251,7 +283,6 @@ function getFilteredSorted() {
   const search   = document.getElementById('search-box').value.trim().toLowerCase();
   const industry = document.getElementById('industry-filter').value;
   const hideC    = document.getElementById('hide-consecutive').checked;
-  const wl       = getWatchlist();
 
   let rows = allRecords.filter(r => {
     if (search && !((r.code||'').toLowerCase().includes(search) ||
@@ -260,6 +291,8 @@ function getFilteredSorted() {
     if (industry && r.industry !== industry) return false;
     if (hideC && (r.consecutive||1) >= 2) return false;
     if (auctionOnly && !isAuction(r.first_time)) return false;
+    // Feature 4: market cap filter
+    if (capFilter !== 'all' && capTier(r.circ_cap) !== capFilter) return false;
     if (tierFilter !== 'all') {
       const bucket = (r.consecutive||1) >= 5 ? 5 : (r.consecutive||1);
       if (bucket !== tierFilter) return false;
@@ -269,12 +302,8 @@ function getFilteredSorted() {
 
   const { col, dir } = sortState;
   rows.sort((a, b) => {
-    let va = col === 'first_time'
-      ? parseInt(a[col] || '999999')
-      : (parseFloat(a[col]) || 0);
-    let vb = col === 'first_time'
-      ? parseInt(b[col] || '999999')
-      : (parseFloat(b[col]) || 0);
+    const va = col === 'first_time' ? parseInt(a[col]||'999999') : (parseFloat(a[col])||0);
+    const vb = col === 'first_time' ? parseInt(b[col]||'999999') : (parseFloat(b[col])||0);
     return dir === 'asc' ? va - vb : vb - va;
   });
   return rows;
@@ -284,7 +313,6 @@ function renderTable() {
   const rows = getFilteredSorted();
   const tbody = document.getElementById('zt-tbody');
   document.getElementById('count-display').textContent = `共 ${rows.length} 只`;
-
   if (!rows.length) { tbody.innerHTML = ''; return; }
 
   const frag = document.createDocumentFragment();
@@ -294,10 +322,9 @@ function renderTable() {
     if (consec >= 2) tr.classList.add('row-consecutive');
 
     const isEarly = isAuction(r.first_time);
-    const timeStr = fmtTime(r.first_time);
     const timeHtml = isEarly
-      ? `<span class="time-early">${timeStr}</span><span class="badge-auction">竞价</span>`
-      : timeStr;
+      ? `<span class="time-early">${fmtTime(r.first_time)}</span><span class="badge-auction">竞价</span>`
+      : fmtTime(r.first_time);
 
     const bc = r.break_count || 0;
     const breakHtml = bc > 0
@@ -311,6 +338,12 @@ function renderTable() {
             target="_blank" onclick="event.stopPropagation()">${r.code}</a>`
       : '—';
 
+    // Feature 6: leader badge
+    const isLeader = leaderCodes.has(r.code);
+    const industryHtml = r.industry
+      ? `${r.industry}${isLeader ? '<span class="leader-badge">龙头</span>' : ''}`
+      : '—';
+
     const watched = isWatched(r.code);
 
     function histCell(count, w) {
@@ -319,38 +352,35 @@ function renderTable() {
     }
 
     tr.innerHTML = `
-      <td><button class="star-btn ${watched ? 'starred' : ''}"
+      <td><button class="star-btn ${watched?'starred':''}"
             data-code="${r.code}" data-name="${r.name||''}">
-            ${watched ? '★' : '☆'}</button></td>
+            ${watched?'★':'☆'}</button></td>
       <td><span class="score-badge ${scoreClass(sc)}">${sc}</span></td>
       <td>${codeLink}</td>
-      <td>${r.name || '—'}</td>
+      <td>${r.name||'—'}</td>
       <td>${timeHtml}</td>
       <td>${fmtAmount(r.volume)}</td>
       <td>${fmtAmount(r.seal_fund)}</td>
       <td>${breakHtml}</td>
       <td><span class="consecutive-badge ${consecClass(consec)}">${consec}</span></td>
-      <td>${r.industry || '—'}</td>
-      <td style="color:var(--text-secondary);font-size:12px">${r.zt_stat || '—'}</td>
+      <td>${industryHtml}</td>
+      <td style="color:var(--text-secondary);font-size:12px">${r.zt_stat||'—'}</td>
       ${histCell(r.week1_count,5)}
       ${histCell(r.week2_count,10)}
       ${histCell(r.week3_count,15)}
       ${histCell(r.month1_count,20)}
     `;
 
-    // Click row → open stock modal (except on link/star)
     tr.addEventListener('click', e => {
       if (e.target.closest('a') || e.target.closest('.star-btn')) return;
       openStockModal(r.code, r.name);
     });
-
     frag.appendChild(tr);
   });
 
   tbody.innerHTML = '';
   tbody.appendChild(frag);
 
-  // Wire star buttons
   tbody.querySelectorAll('.star-btn').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
@@ -371,11 +401,10 @@ function setupSorting() {
       } else {
         sortState.col = col;
         sortState.dir = ['score','volume','seal_fund','consecutive',
-                         'week1_count','week2_count','week3_count','month1_count'].includes(col)
-          ? 'desc' : 'asc';
+                         'week1_count','week2_count','week3_count','month1_count']
+          .includes(col) ? 'desc' : 'asc';
       }
-      updateSortHeaders();
-      renderTable();
+      updateSortHeaders(); renderTable();
     });
   });
   updateSortHeaders();
@@ -389,18 +418,29 @@ function updateSortHeaders() {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// FILTERS
+// FILTERS SETUP
 // ─────────────────────────────────────────────────────────────────
 function setupFilters() {
   document.getElementById('search-box').addEventListener('input', renderTable);
   document.getElementById('industry-filter').addEventListener('change', renderTable);
   document.getElementById('hide-consecutive').addEventListener('change', renderTable);
 
+  // Auction filter
   const auctionBtn = document.getElementById('auction-filter');
   auctionBtn.addEventListener('click', () => {
     auctionOnly = !auctionOnly;
     auctionBtn.classList.toggle('active', auctionOnly);
     renderTable();
+  });
+
+  // Feature 4: market cap filter pills
+  document.querySelectorAll('.cap-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.cap-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      capFilter = btn.dataset.cap;
+      renderTable();
+    });
   });
 
   document.getElementById('load-btn').addEventListener('click', () => {
@@ -430,9 +470,7 @@ async function loadStrongData() {
   const loading = document.getElementById('strong-loading');
   const table   = document.getElementById('strong-table');
   const empty   = document.getElementById('strong-empty');
-  loading.classList.remove('hidden');
-  table.classList.add('hidden');
-  empty.classList.add('hidden');
+  loading.classList.remove('hidden'); table.classList.add('hidden'); empty.classList.add('hidden');
   try {
     const data = await fetch(`/api/strong/${currentDate}`).then(r => r.json());
     strongLoaded = true;
@@ -456,8 +494,7 @@ async function loadStrongData() {
     table.classList.remove('hidden');
   } catch {
     loading.classList.add('hidden');
-    empty.textContent = '数据加载失败';
-    empty.classList.remove('hidden');
+    empty.textContent = '数据加载失败'; empty.classList.remove('hidden');
   }
 }
 
@@ -468,61 +505,48 @@ async function maybeLoadAnalysis() {
   if (analysisLoadedFor === currentDate) return;
   analysisLoadedFor = currentDate;
 
-  // Sector chart can be rendered immediately from existing data
-  renderSectorChart();
+  renderSectorChart();   // client-side, no API call
 
-  // Trend and nextday require API calls
-  const [trendRes, nextdayRes] = await Promise.allSettled([
+  const [trendRes, nextdayRes, tierPromoRes] = await Promise.allSettled([
     fetch(`/api/market-trend/${currentDate}`).then(r => r.json()),
     fetch(`/api/nextday-stats/${currentDate}`).then(r => r.json()),
+    fetch(`/api/tier-promotion/${currentDate}`).then(r => r.json()),  // Feature 5
   ]);
 
-  if (trendRes.status === 'fulfilled') renderTrendChart(trendRes.value.trend);
-  if (nextdayRes.status === 'fulfilled') renderNextdayStats(nextdayRes.value);
+  if (trendRes.status === 'fulfilled')    renderTrendChart(trendRes.value.trend);
+  if (nextdayRes.status === 'fulfilled')  renderNextdayStats(nextdayRes.value);
+  if (tierPromoRes.status === 'fulfilled') renderTierPromotion(tierPromoRes.value);  // Feature 5
 }
 
-// Chart: 市场温度趋势
+// Chart: 市场温度
 function renderTrendChart(trend) {
-  const loading = document.getElementById('trend-loading');
-  loading.classList.add('hidden');
-
+  document.getElementById('trend-loading').classList.add('hidden');
   const labels = trend.map(d => fmtDateShort(d.date));
-  const totals = trend.map(d => d.total_zt);
-  const promo  = trend.map(d => d.promotion_rate);
-  const broke  = trend.map(d => d.broke_rate);
-
   if (trendChartInst) trendChartInst.destroy();
   trendChartInst = new Chart(document.getElementById('trend-chart'), {
     data: {
       labels,
       datasets: [
-        {
-          type: 'bar', label: '涨停数量', data: totals,
-          backgroundColor: 'rgba(220,38,38,.15)', borderColor: 'rgba(220,38,38,.6)',
-          borderWidth: 1, yAxisID: 'y',
-        },
-        {
-          type: 'line', label: '晋级率%', data: promo,
-          borderColor: '#16a34a', backgroundColor: 'transparent',
-          borderWidth: 2, pointRadius: 3, tension: 0.3, yAxisID: 'y2',
-          spanGaps: true,
-        },
-        {
-          type: 'line', label: '炸板率%', data: broke,
-          borderColor: '#ea580c', backgroundColor: 'transparent',
-          borderWidth: 2, pointRadius: 3, tension: 0.3, yAxisID: 'y2',
-        },
+        { type:'bar',  label:'涨停数量', data: trend.map(d=>d.total_zt),
+          backgroundColor:'rgba(220,38,38,.15)', borderColor:'rgba(220,38,38,.6)',
+          borderWidth:1, yAxisID:'y' },
+        { type:'line', label:'晋级率%', data: trend.map(d=>d.promotion_rate),
+          borderColor:'#16a34a', backgroundColor:'transparent',
+          borderWidth:2, pointRadius:3, tension:0.3, yAxisID:'y2', spanGaps:true },
+        { type:'line', label:'炸板率%', data: trend.map(d=>d.broke_rate),
+          borderColor:'#ea580c', backgroundColor:'transparent',
+          borderWidth:2, pointRadius:3, tension:0.3, yAxisID:'y2' },
       ],
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { labels: { font: { size: 12 } } } },
-      scales: {
-        x: { ticks: { font: { size: 11 } } },
-        y:  { position: 'left',  title: { display: true, text: '涨停数', font: { size: 11 } } },
-        y2: { position: 'right', title: { display: true, text: '%', font: { size: 11 } },
-               grid: { drawOnChartArea: false }, min: 0, max: 100 },
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{ legend:{ labels:{ font:{size:12} } } },
+      scales:{
+        x:{ ticks:{ font:{size:11} } },
+        y:{ position:'left',  title:{ display:true, text:'涨停数', font:{size:11} } },
+        y2:{ position:'right', title:{ display:true, text:'%', font:{size:11} },
+             grid:{ drawOnChartArea:false }, min:0, max:100 },
       },
     },
   });
@@ -531,86 +555,187 @@ function renderTrendChart(trend) {
 // Chart: 板块热度
 function renderSectorChart() {
   if (!allRecords.length) {
-    document.getElementById('sector-empty').classList.remove('hidden');
-    return;
+    document.getElementById('sector-empty').classList.remove('hidden'); return;
   }
   document.getElementById('sector-empty').classList.add('hidden');
-
   const counts = {};
-  allRecords.forEach(r => {
-    if (r.industry) counts[r.industry] = (counts[r.industry] || 0) + 1;
-  });
-  const sorted = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, 15);
-  const labels = sorted.map(([ind]) => ind);
-  const values = sorted.map(([,n]) => n);
-
+  allRecords.forEach(r => { if (r.industry) counts[r.industry] = (counts[r.industry]||0)+1; });
+  const sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,15);
   if (sectorChartInst) sectorChartInst.destroy();
   sectorChartInst = new Chart(document.getElementById('sector-chart'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        label: '涨停只数', data: values,
-        backgroundColor: values.map((v, i) =>
-          i === 0 ? 'rgba(220,38,38,.75)' :
-          i <= 2  ? 'rgba(234,88,12,.6)'  : 'rgba(37,99,235,.3)'
-        ),
-        borderWidth: 0, borderRadius: 3,
-      }],
+    type:'bar',
+    data:{
+      labels: sorted.map(([ind])=>ind),
+      datasets:[{ label:'涨停只数', data: sorted.map(([,n])=>n),
+        backgroundColor: sorted.map((_,i) =>
+          i===0?'rgba(220,38,38,.75)': i<=2?'rgba(234,88,12,.6)':'rgba(37,99,235,.3)'),
+        borderWidth:0, borderRadius:3 }],
     },
-    options: {
-      indexAxis: 'y',
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { stepSize: 1 } },
-        y: { ticks: { font: { size: 12 } } },
-      },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ display:false } },
+      scales:{ x:{ ticks:{ stepSize:1 } }, y:{ ticks:{ font:{size:12} } } },
     },
   });
 }
 
-// 次日打板胜率
+// 次日再涨停率
 function renderNextdayStats(data) {
-  const loading = document.getElementById('nextday-loading');
-  const na      = document.getElementById('nextday-na');
-  const grid    = document.getElementById('nextday-stats');
-
-  loading.classList.add('hidden');
-
-  if (!data.available) {
-    na.classList.remove('hidden');
-    return;
-  }
-
+  document.getElementById('nextday-loading').classList.add('hidden');
+  if (!data.available) { document.getElementById('nextday-na').classList.remove('hidden'); return; }
+  const grid = document.getElementById('nextday-stats');
   grid.innerHTML = '';
   data.tiers.forEach(t => {
-    const rateClass = t.rate >= 40 ? 'high' : t.rate >= 20 ? 'mid' : 'low';
+    const rc = t.rate>=40?'high': t.rate>=20?'mid':'low';
     const div = document.createElement('div');
     div.className = 'nextday-tier';
-    div.innerHTML = `
-      <div class="nextday-tier-label">${t.label} 次日再涨停</div>
-      <div class="nextday-rate ${rateClass}">${t.rate}%</div>
-      <div class="nextday-detail">${t.hit_next_zt} / ${t.total} 只</div>
-    `;
+    div.innerHTML = `<div class="nextday-tier-label">${t.label} 次日再涨停</div>
+      <div class="nextday-rate ${rc}">${t.rate}%</div>
+      <div class="nextday-detail">${t.hit_next_zt} / ${t.total} 只</div>`;
+    grid.appendChild(div);
+  });
+  grid.classList.remove('hidden');
+}
+
+// Feature 5: 连板晋级率
+function renderTierPromotion(data) {
+  document.getElementById('tier-promo-loading').classList.add('hidden');
+  const grid = document.getElementById('tier-promo-grid');
+  if (!data.stats || !data.stats.length) {
+    grid.innerHTML = '<div style="color:var(--text-secondary)">暂无足够历史数据</div>';
+    grid.classList.remove('hidden');
+    return;
+  }
+  grid.innerHTML = '';
+  data.stats.forEach(t => {
+    const rc = t.rate>=40?'high': t.rate>=20?'mid':'low';
+    const div = document.createElement('div');
+    div.className = 'nextday-tier';
+    div.innerHTML = `<div class="nextday-tier-label">${t.label}</div>
+      <div class="nextday-rate ${rc}">${t.rate}%</div>
+      <div class="nextday-detail">${t.advanced} / ${t.attempts} 次（${data.days}日）</div>`;
     grid.appendChild(div);
   });
   grid.classList.remove('hidden');
 }
 
 // ─────────────────────────────────────────────────────────────────
-// STOCK TIMELINE MODAL
+// FEATURE 7: STOCK MODAL WITH K-LINE + TIMELINE
 // ─────────────────────────────────────────────────────────────────
+function setupModal() {
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+  document.getElementById('stock-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('stock-modal')) closeModal();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+  // Modal tab switching
+  document.querySelectorAll('.modal-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.modal-tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.modal-tab-pane').forEach(p => p.classList.add('hidden'));
+      btn.classList.add('active');
+      document.getElementById(`modal-tab-${btn.dataset.modalTab}`).classList.remove('hidden');
+    });
+  });
+}
+
+function closeModal() {
+  document.getElementById('stock-modal').classList.add('hidden');
+  if (klineChart) { klineChart.remove(); klineChart = null; }
+}
+
 async function openStockModal(code, name) {
+  // Reset modal state
   document.getElementById('modal-name').textContent = name || code;
   document.getElementById('modal-code').textContent = code;
+  document.getElementById('stock-modal').classList.remove('hidden');
+
+  // Activate K-line tab by default
+  document.querySelectorAll('.modal-tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.modal-tab-pane').forEach(p => p.classList.add('hidden'));
+  document.querySelector('.modal-tab-btn[data-modal-tab="kline"]').classList.add('active');
+  document.getElementById('modal-tab-kline').classList.remove('hidden');
+
+  // Reset K-line container
+  if (klineChart) { klineChart.remove(); klineChart = null; }
+  document.getElementById('kline-container').innerHTML = '';
+  document.getElementById('kline-loading').classList.remove('hidden');
+  document.getElementById('kline-loading').textContent = '加载中…';
+
+  // Reset timeline
   document.getElementById('timeline-loading').classList.remove('hidden');
   document.getElementById('timeline-grid').innerHTML = '';
   document.getElementById('timeline-stats').innerHTML = '';
-  document.getElementById('stock-modal').classList.remove('hidden');
 
+  // Load both in parallel
+  loadKlineChart(code);
+  loadTimeline(code);
+}
+
+async function loadKlineChart(code) {
+  const container = document.getElementById('kline-container');
+  try {
+    const data = await fetch(`/api/kline/${code}/${currentDate}`).then(r => r.json());
+    document.getElementById('kline-loading').classList.add('hidden');
+
+    if (!data.kline?.length) {
+      container.innerHTML = '<div style="padding:20px;color:var(--text-secondary)">K线数据暂无</div>';
+      return;
+    }
+
+    // Format for lightweight-charts: time must be "YYYY-MM-DD"
+    const candles = data.kline.map(d => ({
+      time:  `${d.date.slice(0,4)}-${d.date.slice(4,6)}-${d.date.slice(6,8)}`,
+      open:  d.open, high: d.high, low: d.low, close: d.close,
+    }));
+
+    // Mark limit-up days (pct ≥ 9.8% as approximation)
+    const ztTimes = new Set(
+      data.kline.filter(d => d.pct >= 9.8)
+                .map(d => `${d.date.slice(0,4)}-${d.date.slice(4,6)}-${d.date.slice(6,8)}`)
+    );
+
+    klineChart = LightweightCharts.createChart(container, {
+      width:  container.clientWidth,
+      height: 300,
+      layout: { background: { color: '#ffffff' }, textColor: '#334155' },
+      grid:   { vertLines: { color: '#f1f5f9' }, horzLines: { color: '#f1f5f9' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#e2e8f0' },
+      timeScale: { borderColor: '#e2e8f0', timeVisible: true },
+    });
+
+    // A股: 涨=红 跌=绿 (Chinese convention)
+    const candleSeries = klineChart.addCandlestickSeries({
+      upColor:        '#dc2626', downColor:        '#16a34a',
+      borderUpColor:  '#dc2626', borderDownColor:  '#16a34a',
+      wickUpColor:    '#dc2626', wickDownColor:    '#16a34a',
+    });
+    candleSeries.setData(candles);
+
+    // Markers for limit-up days
+    if (ztTimes.size > 0) {
+      candleSeries.setMarkers(
+        candles.filter(c => ztTimes.has(c.time)).map(c => ({
+          time: c.time, position: 'aboveBar',
+          color: '#dc2626', shape: 'circle', size: 0.6,
+        }))
+      );
+    }
+
+    klineChart.timeScale().fitContent();
+
+  } catch {
+    document.getElementById('kline-loading').classList.add('hidden');
+    container.innerHTML = '<div style="padding:20px;color:var(--text-secondary)">加载失败</div>';
+  }
+}
+
+async function loadTimeline(code) {
   try {
     const data = await fetch(`/api/stock-timeline/${code}/${currentDate}`).then(r => r.json());
+    document.getElementById('timeline-loading').classList.add('hidden');
     renderTimeline(data.timeline || []);
   } catch {
     document.getElementById('timeline-loading').textContent = '加载失败';
@@ -618,19 +743,13 @@ async function openStockModal(code, name) {
 }
 
 function renderTimeline(timeline) {
-  document.getElementById('timeline-loading').classList.add('hidden');
-
   const grid = document.getElementById('timeline-grid');
   grid.innerHTML = '';
-
-  let ztCount = 0;
-  let maxConsec = 0;
+  let ztCount = 0, maxConsec = 0;
 
   timeline.forEach(day => {
     const cell = document.createElement('div');
-    const ft = day.first_time ? parseInt(day.first_time) : null;
-    const early = ft !== null && ft <= 92559;
-
+    const early = isAuction(day.first_time);
     if (day.hit_zt) {
       ztCount++;
       if (day.consecutive > maxConsec) maxConsec = day.consecutive;
@@ -646,26 +765,12 @@ function renderTimeline(timeline) {
     grid.appendChild(cell);
   });
 
-  const stats = document.getElementById('timeline-stats');
-  stats.innerHTML = `
+  document.getElementById('timeline-stats').innerHTML = `
     <div class="ts-item"><div class="ts-label">近30日涨停</div><div class="ts-val">${ztCount}</div></div>
-    <div class="ts-item"><div class="ts-label">最高连板</div><div class="ts-val">${maxConsec || '—'}</div></div>
+    <div class="ts-item"><div class="ts-label">最高连板</div><div class="ts-val">${maxConsec||'—'}</div></div>
     <div class="ts-item"><div class="ts-label">涨停频率</div>
-      <div class="ts-val">${timeline.length ? (ztCount/timeline.length*100).toFixed(0)+'%' : '—'}</div></div>
+      <div class="ts-val">${timeline.length?(ztCount/timeline.length*100).toFixed(0)+'%':'—'}</div></div>
   `;
-}
-
-function setupModal() {
-  document.getElementById('modal-close').addEventListener('click', closeModal);
-  document.getElementById('stock-modal').addEventListener('click', e => {
-    if (e.target === document.getElementById('stock-modal')) closeModal();
-  });
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeModal();
-  });
-}
-function closeModal() {
-  document.getElementById('stock-modal').classList.add('hidden');
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -674,27 +779,23 @@ function closeModal() {
 function renderWatchlistTab() {
   const wl    = getWatchlist();
   const codes = Object.keys(wl);
-  const title = document.getElementById('watchlist-title');
+  document.getElementById('watchlist-title').textContent = `自选股（${codes.length} 只）`;
+
   const empty = document.getElementById('watchlist-empty');
   const wrap  = document.getElementById('watchlist-table-wrap');
+  if (!codes.length) { empty.classList.remove('hidden'); wrap.style.display='none'; return; }
+  empty.classList.add('hidden'); wrap.style.display='block';
 
-  title.textContent = `自选股（${codes.length} 只）`;
-
-  if (!codes.length) {
-    empty.classList.remove('hidden'); wrap.style.display = 'none'; return;
-  }
-  empty.classList.add('hidden'); wrap.style.display = 'block';
-
-  // Build lookup from today's records
   const todayMap = {};
   allRecords.forEach(r => { if (r.code) todayMap[r.code] = r; });
 
   const tbody = document.getElementById('watchlist-tbody');
   tbody.innerHTML = '';
   codes.forEach(code => {
-    const r   = todayMap[code];
+    const r    = todayMap[code];
     const name = wl[code];
-    const tr = document.createElement('tr');
+    const tr   = document.createElement('tr');
+    tr.style.cursor = 'pointer';
 
     if (r) {
       const isEarly = isAuction(r.first_time);
@@ -702,36 +803,31 @@ function renderWatchlistTab() {
         <td><button class="star-btn starred" data-code="${code}" data-name="${name}">★</button></td>
         <td><strong>${code}</strong></td>
         <td>${name}</td>
-        <td class="status-zt">涨停 ${r.consecutive > 1 ? r.consecutive+'板' : ''}</td>
-        <td>${isEarly ? `<span class="time-early">${fmtTime(r.first_time)}</span><span class="badge-auction">竞价</span>` : fmtTime(r.first_time)}</td>
+        <td class="status-zt">涨停${r.consecutive>1?' '+r.consecutive+'板':''}</td>
+        <td>${isEarly
+              ? `<span class="time-early">${fmtTime(r.first_time)}</span><span class="badge-auction">竞价</span>`
+              : fmtTime(r.first_time)}</td>
         <td>${fmtAmount(r.volume)}</td>
-        <td>${r.break_count > 0 ? `<span class="break-warn">${r.break_count}</span>` : '0'}</td>
+        <td>${r.break_count>0?`<span class="break-warn">${r.break_count}</span>`:'0'}</td>
         <td><span class="consecutive-badge ${consecClass(r.consecutive||1)}">${r.consecutive||1}</span></td>
         <td><span class="score-badge ${scoreClass(r.score||0)}">${r.score||0}</span></td>
       `;
     } else {
       tr.innerHTML = `
         <td><button class="star-btn starred" data-code="${code}" data-name="${name}">★</button></td>
-        <td><strong>${code}</strong></td>
-        <td>${name}</td>
+        <td><strong>${code}</strong></td><td>${name}</td>
         <td class="status-none">未涨停</td>
         <td colspan="5" style="color:var(--text-secondary)">—</td>
       `;
     }
 
     tr.querySelectorAll('.star-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        toggleWatchlist(btn.dataset.code, btn.dataset.name);
-        renderWatchlistTab();
-      });
+      btn.addEventListener('click', () => { toggleWatchlist(btn.dataset.code, btn.dataset.name); renderWatchlistTab(); });
     });
-
     tr.addEventListener('click', e => {
       if (e.target.closest('.star-btn')) return;
       openStockModal(code, name);
     });
-    tr.style.cursor = 'pointer';
-
     tbody.appendChild(tr);
   });
 }
@@ -753,7 +849,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupStrongSection();
   setupModal();
   updateWatchlistBadge();
-
   try {
     const latest = await initDatePicker();
     await loadData(latest);

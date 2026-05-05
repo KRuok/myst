@@ -473,3 +473,119 @@ async def compute_nextday_stats(date_str: str) -> dict:
         "next_date": next_date,
         "tiers": tiers,
     }
+
+
+# ---------------------------------------------------------------------------
+# K-line (daily OHLCV for a single stock)
+# ---------------------------------------------------------------------------
+
+def _fetch_kline_sync(code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    return ak.stock_zh_a_hist(
+        symbol=code,
+        period="daily",
+        start_date=start_date,
+        end_date=end_date,
+        adjust="qfq",
+    )
+
+
+async def fetch_stock_kline(code: str, anchor_date: str, days: int = 40) -> list[dict]:
+    """Fetch daily OHLCV for a stock covering the last `days` trading days."""
+    date_list = get_previous_n_trading_dates(anchor_date, days)
+    if not date_list:
+        return []
+    start_date = date_list[0]
+
+    try:
+        df = await asyncio.wait_for(
+            _run_sync(_fetch_kline_sync, code, start_date, anchor_date),
+            timeout=25,
+        )
+    except Exception as e:
+        logger.error("Failed to fetch kline for %s: %s", code, e)
+        return []
+
+    if df is None or df.empty:
+        return []
+
+    records = []
+    for _, row in df.iterrows():
+        try:
+            records.append({
+                "date": str(row["日期"]).replace("-", ""),
+                "open":  float(row["开盘"]),
+                "high":  float(row["最高"]),
+                "low":   float(row["最低"]),
+                "close": float(row["收盘"]),
+                "volume": int(row["成交量"]),
+                "pct":   float(row.get("涨跌幅", 0)),
+            })
+        except Exception:
+            continue
+    return records
+
+
+# ---------------------------------------------------------------------------
+# Consecutive tier promotion stats (aggregate over past N days)
+# ---------------------------------------------------------------------------
+
+async def compute_tier_promotion_stats(anchor_date: str, days: int = 30) -> list[dict]:
+    """
+    For each consecutive tier (1,2,3,4+), compute the historical rate at which
+    stocks advanced to the next tier the following trading day, over the past
+    `days` trading days.
+    """
+    all_dates = get_previous_n_trading_dates(anchor_date, days + 1)
+    if len(all_dates) < 2:
+        return []
+
+    sem = asyncio.Semaphore(MAX_PARALLEL_FETCHES)
+
+    async def fetch_safe(d: str):
+        async with sem:
+            try:
+                return d, await fetch_zt_data(d)
+            except Exception:
+                return d, []
+
+    results = await asyncio.gather(*[fetch_safe(d) for d in all_dates])
+    date_data: dict[str, list] = dict(results)
+
+    tier_stats: dict[int, dict] = {}
+
+    for i in range(len(all_dates) - 1):
+        d      = all_dates[i]
+        d_next = all_dates[i + 1]
+        today_recs = date_data.get(d, [])
+        next_recs  = date_data.get(d_next, [])
+        # Map code → consecutive for next day
+        next_map = {
+            r["code"]: int(r.get("consecutive") or 1)
+            for r in next_recs if r.get("code")
+        }
+
+        for r in today_recs:
+            code = r.get("code")
+            if not code:
+                continue
+            c = int(r.get("consecutive") or 1)
+            bucket = c if c <= 3 else 4
+            tier_stats.setdefault(bucket, {"attempts": 0, "advanced": 0})
+            tier_stats[bucket]["attempts"] += 1
+            # Advanced = appeared next day with consecutive == c + 1
+            if next_map.get(code) == c + 1:
+                tier_stats[bucket]["advanced"] += 1
+
+    result = []
+    for bucket in sorted(tier_stats.keys()):
+        s = tier_stats[bucket]
+        label = f"{bucket}板→{bucket+1}板" if bucket <= 3 else "4板+→5板+"
+        result.append({
+            "label":    label,
+            "from_tier": bucket,
+            "attempts": s["attempts"],
+            "advanced": s["advanced"],
+            "rate": round(s["advanced"] / s["attempts"] * 100, 1) if s["attempts"] else 0.0,
+            "days": days,
+        })
+    return result
