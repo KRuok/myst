@@ -20,6 +20,9 @@ from data_service import (
     compute_history_counts,
     compute_sentiment,
     compute_tiers,
+    compute_market_trend,
+    fetch_stock_timeline,
+    compute_nextday_stats,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -121,3 +124,38 @@ async def strong_stocks(date: str):
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"date": date, "total": len(records), "records": records}
+
+
+@app.get("/api/market-trend/{date}")
+async def market_trend(date: str, days: int = Query(default=20, ge=5, le=60)):
+    if not is_trading_date(date):
+        raise HTTPException(status_code=400, detail={"error": "not_a_trading_date"})
+    try:
+        data = await compute_market_trend(date, days)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"date": date, "days": days, "trend": data}
+
+
+@app.get("/api/stock-timeline/{code}/{date}")
+async def stock_timeline_endpoint(
+    code: str, date: str, days: int = Query(default=30, ge=10, le=60)
+):
+    if not is_trading_date(date):
+        raise HTTPException(status_code=400, detail={"error": "not_a_trading_date"})
+    try:
+        data = await fetch_stock_timeline(code, date, days)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"code": code, "date": date, "timeline": data}
+
+
+@app.get("/api/nextday-stats/{date}")
+async def nextday_stats_endpoint(date: str):
+    if not is_trading_date(date):
+        raise HTTPException(status_code=400, detail={"error": "not_a_trading_date"})
+    try:
+        data = await compute_nextday_stats(date)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return data

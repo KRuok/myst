@@ -1,10 +1,15 @@
+import sys
+import types
 import json
 import os
 import asyncio
 import datetime
 import logging
 
-import akshare as ak  # config.py already injected the jsonpath stub
+if "jsonpath" not in sys.modules:
+    sys.modules["jsonpath"] = types.ModuleType("jsonpath")
+
+import akshare as ak
 import pandas as pd
 
 from config import CACHE_DIR, PERIODS, MAX_PARALLEL_FETCHES
@@ -335,3 +340,136 @@ def compute_tiers(records: list[dict]) -> list[dict]:
             "codes": [s["code"] for s in stocks if s.get("code")],
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# Market trend (past N days daily stats)
+# ---------------------------------------------------------------------------
+
+async def compute_market_trend(anchor_date: str, days: int = 20) -> list[dict]:
+    """Returns per-day stats for the past `days` trading days ending at anchor_date."""
+    all_dates = get_previous_n_trading_dates(anchor_date, days + 1)
+    if len(all_dates) < 2:
+        return []
+
+    sem = asyncio.Semaphore(MAX_PARALLEL_FETCHES)
+
+    async def fetch_safe(d: str):
+        async with sem:
+            try:
+                return d, await fetch_zt_data(d)
+            except Exception:
+                return d, []
+
+    results = await asyncio.gather(*[fetch_safe(d) for d in all_dates])
+    date_data: dict[str, list] = dict(results)
+
+    dates = all_dates[1:]  # the `days` dates we compute stats for
+    trend = []
+    for i, d in enumerate(dates):
+        recs = date_data.get(d, [])
+        prev_recs = date_data.get(all_dates[i], [])
+
+        total = len(recs)
+        broke = sum(1 for r in recs if (r.get("break_count") or 0) > 0)
+
+        promotion_rate = None
+        if prev_recs:
+            prev_codes = {r["code"] for r in prev_recs if r.get("code")}
+            today_codes = {r["code"] for r in recs if r.get("code")}
+            if prev_codes:
+                promoted = len(prev_codes & today_codes)
+                promotion_rate = round(promoted / len(prev_codes) * 100, 1)
+
+        trend.append({
+            "date": d,
+            "total_zt": total,
+            "broke_rate": round(broke / total * 100, 1) if total > 0 else 0.0,
+            "promotion_rate": promotion_rate,
+        })
+
+    return trend
+
+
+# ---------------------------------------------------------------------------
+# Stock timeline (30-day per-day ZT status for one stock)
+# ---------------------------------------------------------------------------
+
+async def fetch_stock_timeline(code: str, anchor_date: str, days: int = 30) -> list[dict]:
+    """Returns day-by-day ZT appearance for a single stock over past `days` trading days."""
+    dates = get_previous_n_trading_dates(anchor_date, days)
+
+    sem = asyncio.Semaphore(MAX_PARALLEL_FETCHES)
+
+    async def fetch_safe(d: str):
+        async with sem:
+            try:
+                return d, await fetch_zt_data(d)
+            except Exception:
+                return d, []
+
+    results = await asyncio.gather(*[fetch_safe(d) for d in dates])
+
+    timeline = []
+    for d, recs in results:
+        stock = next((r for r in recs if r.get("code") == code), None)
+        timeline.append({
+            "date": d,
+            "hit_zt": stock is not None,
+            "consecutive": stock.get("consecutive", 0) if stock else 0,
+            "break_count": stock.get("break_count", 0) if stock else 0,
+            "first_time": stock.get("first_time") if stock else None,
+            "score": stock.get("score") if stock else None,
+        })
+
+    return timeline
+
+
+# ---------------------------------------------------------------------------
+# Next-day performance stats (grouped by tier)
+# ---------------------------------------------------------------------------
+
+async def compute_nextday_stats(date_str: str) -> dict:
+    """For each consecutive tier in today's pool, compute % that hit ZT again next day."""
+    from trading_calendar import get_next_trading_date
+
+    next_date = get_next_trading_date(date_str)
+    today_str = datetime.date.today().strftime("%Y%m%d")
+
+    if next_date is None or next_date > today_str:
+        return {"available": False, "reason": "next_date_not_yet"}
+
+    today_recs, next_recs = await asyncio.gather(
+        fetch_zt_data(date_str),
+        fetch_zt_data(next_date),
+    )
+
+    if not today_recs:
+        return {"available": False, "reason": "no_data"}
+
+    next_codes = {r["code"] for r in next_recs if r.get("code")}
+
+    tier_map: dict[int, list] = {}
+    for r in today_recs:
+        c = int(r.get("consecutive") or 1)
+        bucket = c if c <= 3 else 4
+        tier_map.setdefault(bucket, []).append(r)
+
+    tiers = []
+    for bucket in sorted(tier_map.keys()):
+        stocks = tier_map[bucket]
+        label = f"{bucket}板" if bucket <= 3 else "4板+"
+        hit = sum(1 for s in stocks if s.get("code") in next_codes)
+        tiers.append({
+            "label": label,
+            "total": len(stocks),
+            "hit_next_zt": hit,
+            "rate": round(hit / len(stocks) * 100, 1),
+        })
+
+    return {
+        "available": True,
+        "date": date_str,
+        "next_date": next_date,
+        "tiers": tiers,
+    }

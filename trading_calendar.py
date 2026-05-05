@@ -52,3 +52,11 @@ def get_prev_trading_date(date_str: str) -> str | None:
     if idx < 0:
         return None
     return _TRADING_DATES[idx]
+
+
+def get_next_trading_date(date_str: str) -> str | None:
+    """Returns the first trading date after date_str."""
+    idx = bisect.bisect_right(_TRADING_DATES, date_str)
+    if idx >= len(_TRADING_DATES):
+        return None
+    return _TRADING_DATES[idx]
