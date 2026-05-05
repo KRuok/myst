@@ -415,4 +415,4 @@ footer {
 .modal-tab-pane.hidden { display: none; }
 
 /* ── K-line container ── */
-#kline-container { height: 300px; border-radius: var(--radius); overflow: hidden; }
+#kline-container { height: 380px; border-radius: var(--radius); overflow: hidden; }

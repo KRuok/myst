@@ -361,6 +361,7 @@ function renderTable() {
       <td>${timeHtml}</td>
       <td>${fmtAmount(r.volume)}</td>
       <td>${fmtAmount(r.seal_fund)}</td>
+      <td>${r.turnover != null ? r.turnover.toFixed(2)+'%' : '—'}</td>
       <td>${breakHtml}</td>
       <td><span class="consecutive-badge ${consecClass(consec)}">${consec}</span></td>
       <td>${industryHtml}</td>
@@ -400,7 +401,7 @@ function setupSorting() {
         sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
       } else {
         sortState.col = col;
-        sortState.dir = ['score','volume','seal_fund','consecutive',
+        sortState.dir = ['score','volume','seal_fund','turnover','consecutive',
                          'week1_count','week2_count','week3_count','month1_count']
           .includes(col) ? 'desc' : 'asc';
       }
@@ -685,25 +686,30 @@ async function loadKlineChart(code) {
     }
 
     // Format for lightweight-charts: time must be "YYYY-MM-DD"
+    const fmt = d => `${d.date.slice(0,4)}-${d.date.slice(4,6)}-${d.date.slice(6,8)}`;
+
     const candles = data.kline.map(d => ({
-      time:  `${d.date.slice(0,4)}-${d.date.slice(4,6)}-${d.date.slice(6,8)}`,
-      open:  d.open, high: d.high, low: d.low, close: d.close,
+      time: fmt(d), open: d.open, high: d.high, low: d.low, close: d.close,
     }));
 
-    // Mark limit-up days (pct ≥ 9.8% as approximation)
+    // Mark limit-up days (pct ≥ 9.8%)
     const ztTimes = new Set(
-      data.kline.filter(d => d.pct >= 9.8)
-                .map(d => `${d.date.slice(0,4)}-${d.date.slice(4,6)}-${d.date.slice(6,8)}`)
+      data.kline.filter(d => d.pct >= 9.8).map(d => fmt(d))
     );
 
     klineChart = LightweightCharts.createChart(container, {
       width:  container.clientWidth,
-      height: 300,
+      height: 380,
       layout: { background: { color: '#ffffff' }, textColor: '#334155' },
       grid:   { vertLines: { color: '#f1f5f9' }, horzLines: { color: '#f1f5f9' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       rightPriceScale: { borderColor: '#e2e8f0' },
       timeScale: { borderColor: '#e2e8f0', timeVisible: true },
+    });
+
+    // Price scale: leave bottom 22% for volume
+    klineChart.priceScale('right').applyOptions({
+      scaleMargins: { top: 0.05, bottom: 0.22 },
     });
 
     // A股: 涨=红 跌=绿 (Chinese convention)
@@ -723,6 +729,20 @@ async function loadKlineChart(code) {
         }))
       );
     }
+
+    // Volume histogram (bottom 22% of chart)
+    const volSeries = klineChart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'vol',
+    });
+    klineChart.priceScale('vol').applyOptions({
+      scaleMargins: { top: 0.8, bottom: 0 },
+    });
+    volSeries.setData(data.kline.map(d => ({
+      time:  fmt(d),
+      value: d.volume,
+      color: d.close >= d.open ? 'rgba(220,38,38,0.4)' : 'rgba(22,163,74,0.4)',
+    })));
 
     klineChart.timeScale().fitContent();
 
