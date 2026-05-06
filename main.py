@@ -50,7 +50,17 @@ _wencai_session.headers.update({
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Sec-Ch-Ua": '"Chromium";v="120", "Google Chrome";v="120"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
 })
 
 _STRIP_HEADERS = {
@@ -160,10 +170,23 @@ async def _proxy(path: str, request: Request) -> RawResponse:
 # ───────────────────────────────────────────────────────────────────────────
 
 
+async def _warmup_wencai_session():
+    """Visit Wencai homepage to acquire initial session cookies."""
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, lambda: _wencai_session.get(_WENCAI_ORIGIN + "/", timeout=15)
+        )
+        logger.info("Wencai session initialized (%d cookies)", len(_wencai_session.cookies))
+    except Exception as exc:
+        logger.warning("Wencai session warmup failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs(CACHE_DIR, exist_ok=True)
-    asyncio.create_task(warm_zt_cache(35))   # background; non-blocking
+    asyncio.create_task(warm_zt_cache(35))
+    asyncio.create_task(_warmup_wencai_session())
     yield
 
 

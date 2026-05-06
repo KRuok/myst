@@ -723,6 +723,8 @@ function setupModal() {
       document.querySelectorAll('.modal-tab-pane').forEach(p => p.classList.add('hidden'));
       btn.classList.add('active');
       document.getElementById(`modal-tab-${btn.dataset.modalTab}`).classList.remove('hidden');
+      // Expand modal for wencai tab (needs desktop-width viewport), shrink back otherwise
+      document.querySelector('.modal-box').classList.toggle('wencai-expanded', btn.dataset.modalTab === 'wencai');
       if (btn.dataset.modalTab === 'wencai' && !wencaiLoaded) {
         const code = document.getElementById('modal-code').textContent;
         const name = document.getElementById('modal-name').textContent;
@@ -734,6 +736,7 @@ function setupModal() {
 
 function closeModal() {
   document.getElementById('stock-modal').classList.add('hidden');
+  document.querySelector('.modal-box').classList.remove('wencai-expanded');
   if (klineChart) { klineChart.remove(); klineChart = null; }
 }
 
