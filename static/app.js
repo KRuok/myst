@@ -1072,6 +1072,11 @@ function loadWencai(code, name) {
   const directUrl = `https://www.iwencai.com/screener/result?w=${query}&querytype=stock&sign=${sign}`;
   extLink.href = directUrl;
 
+  // Show the URL in the address bar
+  const addrEl = document.getElementById('wencai-addr-url');
+  addrEl.textContent = directUrl;
+  addrEl.href = directUrl;
+
   loading.classList.remove('hidden');
   iframe.classList.add('hidden');
   errDiv.classList.add('hidden');
