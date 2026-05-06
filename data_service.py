@@ -5,6 +5,7 @@ import os
 import asyncio
 import datetime
 import logging
+import random
 
 if "jsonpath" not in sys.modules:
     sys.modules["jsonpath"] = types.ModuleType("jsonpath")
@@ -198,6 +199,28 @@ async def _run_sync(fn, *args):
     return await loop.run_in_executor(None, fn, *args)
 
 
+async def _fetch_with_retry(fn, *args, retries: int = 3, timeout: float = 25) -> pd.DataFrame:
+    """Run a sync AKShare fetch with exponential backoff on transient network errors.
+
+    Delays: 2s, 4s (+ up to 1s jitter each). Timeout errors are not retried.
+    """
+    for attempt in range(retries):
+        try:
+            return await asyncio.wait_for(_run_sync(fn, *args), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise RuntimeError("请求超时，请稍后重试")
+        except Exception as e:
+            if attempt == retries - 1:
+                raise
+            wait = 2.0 * (2 ** attempt) + random.uniform(0, 1.0)
+            logger.warning(
+                "AKShare fetch attempt %d/%d failed (%.1fs retry): %s",
+                attempt + 1, retries, wait, e,
+            )
+            await asyncio.sleep(wait)
+    raise RuntimeError("unreachable")
+
+
 async def warm_zt_cache(days: int = 35) -> None:
     """
     Background task: pre-fetch ZT pool data for the past `days` trading days.
@@ -286,6 +309,7 @@ async def compute_history_counts(date_str: str, records: list[dict]) -> list[dic
 
     async def fetch_with_sem(d: str):
         async with sem:
+            await asyncio.sleep(random.uniform(0.0, 0.2))
             try:
                 return d, await fetch_zt_data(d)
             except Exception:
@@ -388,6 +412,7 @@ async def compute_market_trend(anchor_date: str, days: int = 20) -> list[dict]:
 
     async def fetch_safe(d: str):
         async with sem:
+            await asyncio.sleep(random.uniform(0.0, 0.2))
             try:
                 return d, await fetch_zt_data(d)
             except Exception:
@@ -435,6 +460,7 @@ async def fetch_stock_timeline(code: str, anchor_date: str, days: int = 30) -> l
 
     async def fetch_safe(d: str):
         async with sem:
+            await asyncio.sleep(random.uniform(0.0, 0.2))
             try:
                 return d, await fetch_zt_data(d)
             except Exception:
@@ -549,12 +575,9 @@ async def fetch_stock_kline(code: str, anchor_date: str, days: int = 40) -> list
     start_date = date_list[0]
 
     try:
-        df = await asyncio.wait_for(
-            _run_sync(_fetch_kline_sync, code, start_date, anchor_date),
-            timeout=25,
-        )
-    except asyncio.TimeoutError:
-        raise RuntimeError("请求超时，请稍后重试")
+        df = await _fetch_with_retry(_fetch_kline_sync, code, start_date, anchor_date)
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error("Failed to fetch kline for %s: %s", code, e)
         raise RuntimeError(f"数据获取失败：{e}")
@@ -601,6 +624,7 @@ async def compute_tier_promotion_stats(anchor_date: str, days: int = 30) -> list
 
     async def fetch_safe(d: str):
         async with sem:
+            await asyncio.sleep(random.uniform(0.0, 0.2))
             try:
                 return d, await fetch_zt_data(d)
             except Exception:
@@ -774,11 +798,9 @@ async def compute_feature_backtest(anchor_date: str, window: int = 20) -> dict:
 
         async def fetch_code_opens(code: str):
             async with sem:
+                await asyncio.sleep(random.uniform(0.05, 0.4))
                 try:
-                    df = await asyncio.wait_for(
-                        _run_sync(_fetch_opens_sync, code, fetch_start, fetch_end),
-                        timeout=20,
-                    )
+                    df = await _fetch_with_retry(_fetch_opens_sync, code, fetch_start, fetch_end)
                     if df is None or df.empty:
                         return code, {}
                     return code, {
@@ -923,11 +945,9 @@ async def compute_zt_trend(date: str) -> list[dict]:
 
     async def fetch_one(code: str):
         async with sem:
+            await asyncio.sleep(random.uniform(0.05, 0.4))
             try:
-                df = await asyncio.wait_for(
-                    _run_sync(_fetch_kline_sync, code, start_date, date),
-                    timeout=20,
-                )
+                df = await _fetch_with_retry(_fetch_kline_sync, code, start_date, date)
                 return code, df
             except Exception as e:
                 logger.warning("Trend kline failed %s: %s", code, e)

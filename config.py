@@ -23,6 +23,6 @@ AKSHARE_CALENDAR_PATH = os.path.join(
     os.path.dirname(_ak.__file__), "file_fold", "calendar.json"
 )
 
-FETCH_TIMEOUT = 20
+FETCH_TIMEOUT = 25
 
-MAX_PARALLEL_FETCHES = 5
+MAX_PARALLEL_FETCHES = 3   # lower = fewer simultaneous connections to EastMoney
