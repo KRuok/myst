@@ -423,7 +423,7 @@ footer {
 .bt-controls select { font-size:13px; padding:2px 4px; border:1px solid var(--border); border-radius:4px; background:var(--surface); color:var(--text); }
 .bt-meta { font-size:12px; color:var(--text-secondary); margin-bottom:12px; }
 .bt-dims { display:flex; gap:16px; flex-wrap:wrap; }
-.bt-dim { flex:1; min-width:180px; }
+.bt-dim { flex:1; min-width:280px; overflow-x:auto; }
 .bt-dim-title { font-size:12px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px; }
 .bt-table { width:100%; border-collapse:collapse; font-size:13px; }
 .bt-table th { text-align:left; padding:4px 6px; font-size:11px; color:var(--text-secondary); border-bottom:1px solid var(--border); font-weight:500; }

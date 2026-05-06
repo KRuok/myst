@@ -378,9 +378,14 @@ function renderTable() {
         if (backtestCross) {
           const k = `${sealBucket(r.first_time)}|${consecBucket(r.consecutive)}`;
           const p = backtestCross[k];
-          if (p && p.n >= 5) {
-            const pc = p.t1_zt_rate >= 50 ? 'pred-high' : p.t1_zt_rate >= 30 ? 'pred-mid' : 'pred-low';
-            pred = `<div class="pred-rate ${pc}">↑${p.t1_zt_rate}%</div>`;
+          if (p) {
+            if (p.t2_win_rate != null && p.t2_n >= 5) {
+              const pc = p.t2_win_rate >= 60 ? 'pred-high' : p.t2_win_rate >= 40 ? 'pred-mid' : 'pred-low';
+              pred = `<div class="pred-rate ${pc}">T2胜${p.t2_win_rate}%</div>`;
+            } else if (p.n >= 5) {
+              const pc = p.t1_zt_rate >= 50 ? 'pred-high' : p.t1_zt_rate >= 30 ? 'pred-mid' : 'pred-low';
+              pred = `<div class="pred-rate ${pc}">↑${p.t1_zt_rate}%</div>`;
+            }
           }
         }
         return `<span class="score-badge ${scoreClass(sc)}">${sc}</span>${pred}`;
@@ -946,15 +951,21 @@ async function renderBacktest(data, win) {
 
   dims.innerHTML = dimDefs.map(def => {
     const rows = (data[def.key] || []).map(b => {
-      const r = b.t1_zt_rate;
-      const rc = r >= 50 ? 'high' : r >= 30 ? 'mid' : 'low';
+      const hasT2 = b.t2_win_rate != null && (b.t2_n || 0) >= 3;
+      const rate  = hasT2 ? b.t2_win_rate : b.t1_zt_rate;
+      const rc    = hasT2
+        ? (rate >= 60 ? 'high' : rate >= 40 ? 'mid' : 'low')
+        : (rate >= 50 ? 'high' : rate >= 30 ? 'mid' : 'low');
       return `<tr>
         <td class="bt-label">${b.label}</td>
         <td class="bt-n">${b.n}</td>
-        <td class="bt-rate bt-${rc}">${r}%</td>
+        <td class="bt-rate bt-${rc}">${hasT2 ? b.t2_win_rate + '%' : '—'}</td>
+        <td class="bt-n">${b.t2_ret_mean != null ? fmtPct(b.t2_ret_mean) : '—'}</td>
+        <td class="bt-n">${b.t1_prem_mean != null ? fmtPct(b.t1_prem_mean) : '—'}</td>
+        <td class="bt-rate bt-${hasT2 ? (b.t1_zt_rate >= 50 ? 'high' : b.t1_zt_rate >= 30 ? 'mid' : 'low') : rc}">${b.t1_zt_rate}%</td>
         <td class="bt-bar-cell">
           <div class="bt-bar-wrap">
-            <div class="bt-bar bt-bar-${rc}" style="width:${Math.min(r,100)}%"></div>
+            <div class="bt-bar bt-bar-${rc}" style="width:${Math.min(rate,100)}%"></div>
           </div>
         </td>
       </tr>`;
@@ -962,7 +973,12 @@ async function renderBacktest(data, win) {
     return `<div class="bt-dim">
       <div class="bt-dim-title">${def.title}</div>
       <table class="bt-table">
-        <thead><tr><th>特征</th><th>样本</th><th>T+1晋级</th><th></th></tr></thead>
+        <thead><tr>
+          <th>特征</th><th>样本</th>
+          <th>T+2胜率</th><th>T+2均收益</th>
+          <th>T+1溢价</th><th>T+1晋级</th>
+          <th></th>
+        </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;

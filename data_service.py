@@ -519,6 +519,15 @@ def _fetch_kline_sync(code: str, start_date: str, end_date: str) -> pd.DataFrame
     )
 
 
+def _fetch_opens_sync(code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """Raw (unadjusted) OHLCV — used so open prices are comparable to ZT pool limit prices."""
+    return ak.stock_zh_a_hist(
+        symbol=code, period="daily",
+        start_date=start_date, end_date=end_date,
+        adjust="",
+    )
+
+
 async def fetch_stock_kline(code: str, anchor_date: str, days: int = 40) -> list[dict]:
     """Fetch daily OHLCV for a stock covering the last `days` trading days."""
     date_list = get_previous_n_trading_dates(anchor_date, days)
@@ -655,68 +664,177 @@ def _break_bucket(break_count) -> str:
     return "2炸+"
 
 
+def _opens_path(date_str: str) -> str:
+    return os.path.join(CACHE_DIR, f"opens_{date_str}.json")
+
+def _load_opens(date_str: str) -> dict[str, float]:
+    path = _opens_path(date_str)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_opens(date_str: str, opens: dict[str, float]) -> None:
+    try:
+        with open(_opens_path(date_str), "w") as f:
+            json.dump(opens, f)
+    except Exception as e:
+        logger.warning("Failed to save opens for %s: %s", date_str, e)
+
+
 async def compute_feature_backtest(anchor_date: str, window: int = 20) -> dict:
     """
-    Rolling window feature-stratified backtest (ZT pool data only, no K-line).
+    Full three-day rolling backtest:
+      T0 → observe 涨停 (features + limit-up price)
+      T+1 → buy at open  (T1 open premium vs T0 limit price)
+      T+2 → sell at open (T2 open return vs T1 open = actual P&L proxy)
 
-    For each T0 day in the past `window` trading days, checks whether each
-    涨停 stock re-appeared in the T+1 ZT pool (proxy for a profitable next-day
-    trade).  Results are stratified by seal time, consecutive tier, and break
-    count, plus a cross-dimension lookup table keyed by "seal|consec".
+    Also tracks T+1 re-limit rate as a secondary signal.
+    Open prices are cached per-date in cache/opens_YYYYMMDD.json.
     """
     today_str = datetime.date.today().strftime("%Y%m%d")
 
-    # Build (t0, t1) pairs where T+1 has already closed
-    raw_dates = get_previous_n_trading_dates(anchor_date, window + 3)
-    pairs: list[tuple[str, str]] = []
+    # Build (T0, T1, T2) triples where T+2 has already closed
+    raw_dates = get_previous_n_trading_dates(anchor_date, window + 4)
+    triples: list[tuple[str, str, str]] = []
     for d in raw_dates:
         t1 = get_next_trading_date(d)
-        if t1 and t1 <= today_str:
-            pairs.append((d, t1))
-    pairs = pairs[-window:]
+        t2 = get_next_trading_date(t1) if t1 else None
+        if t2 and t2 <= today_str:
+            triples.append((d, t1, t2))
+    triples = triples[-window:]
 
-    if not pairs:
+    if not triples:
         return {"window": window, "total": 0}
 
-    needed: set[str] = set()
-    for t0, t1 in pairs:
-        needed.add(t0)
-        needed.add(t1)
+    t0_dates = [t[0] for t in triples]
+    t1_dates = list(dict.fromkeys(t[1] for t in triples))
+    t2_dates = list(dict.fromkeys(t[2] for t in triples))
+    needed_t1t2 = set(t1_dates) | set(t2_dates)
 
+    # ── Fetch ZT pools for T0 and T1 ────────────────────────────────
     sem = asyncio.Semaphore(MAX_PARALLEL_FETCHES)
 
-    async def fetch_safe(d: str):
+    async def fetch_zt_safe(d: str):
         async with sem:
             try:
                 return d, await fetch_zt_data(d)
             except Exception:
                 return d, []
 
-    zt_results = await asyncio.gather(*[fetch_safe(d) for d in needed])
+    needed_zt = set(t0_dates) | set(t1_dates)
+    zt_results = await asyncio.gather(*[fetch_zt_safe(d) for d in needed_zt])
     zt_pools: dict[str, list] = dict(zt_results)
 
-    # Build flat outcome records
+    # ── Collect unique codes from all T0 pools ───────────────────────
+    all_t0_codes: set[str] = set()
+    for t0, _, _ in triples:
+        for r in zt_pools.get(t0, []):
+            if r.get("code"):
+                all_t0_codes.add(r["code"])
+
+    # ── Load existing per-date opens caches ──────────────────────────
+    opens_by_date: dict[str, dict[str, float]] = {
+        d: _load_opens(d) for d in needed_t1t2
+    }
+
+    # Determine which codes are missing for any T1/T2 date
+    missing_codes: set[str] = {
+        c for c in all_t0_codes
+        for d in needed_t1t2
+        if c not in opens_by_date[d]
+    }
+
+    # ── Batch-fetch missing: one K-line call per unique code ─────────
+    if missing_codes:
+        fetch_start = min(t1_dates + t2_dates)
+        fetch_end   = max(t1_dates + t2_dates)
+
+        async def fetch_code_opens(code: str):
+            async with sem:
+                try:
+                    df = await asyncio.wait_for(
+                        _run_sync(_fetch_opens_sync, code, fetch_start, fetch_end),
+                        timeout=20,
+                    )
+                    if df is None or df.empty:
+                        return code, {}
+                    return code, {
+                        str(row["日期"]).replace("-", ""): float(row["开盘"])
+                        for _, row in df.iterrows()
+                    }
+                except Exception as e:
+                    logger.warning("Opens fetch failed %s: %s", code, e)
+                    return code, {}
+
+        kline_results = await asyncio.gather(
+            *[fetch_code_opens(c) for c in missing_codes]
+        )
+
+        # Merge into per-date opens and persist cache
+        new_by_date: dict[str, dict[str, float]] = defaultdict(dict)
+        for code, date_map in kline_results:
+            for date, open_price in date_map.items():
+                if date in needed_t1t2:
+                    new_by_date[date][code] = open_price
+                    opens_by_date[date][code] = open_price
+
+        for date, new_opens in new_by_date.items():
+            merged = opens_by_date.get(date, {})
+            merged.update(new_opens)
+            _save_opens(date, merged)
+
+    # ── Build flat outcome records ────────────────────────────────────
     all_records: list[dict] = []
-    for t0, t1 in pairs:
-        t1_codes = {r["code"] for r in zt_pools.get(t1, []) if r.get("code")}
+    for t0, t1, t2 in triples:
+        t1_zt_codes = {r["code"] for r in zt_pools.get(t1, []) if r.get("code")}
+        t1_opens    = opens_by_date.get(t1, {})
+        t2_opens    = opens_by_date.get(t2, {})
+
         for r in zt_pools.get(t0, []):
             code = r.get("code")
             if not code:
                 continue
-            all_records.append({
+            record: dict = {
                 "seal":   _seal_bucket(r.get("first_time")),
                 "consec": _consec_bucket(r.get("consecutive")),
                 "breaks": _break_bucket(r.get("break_count")),
-                "t1_hit": code in t1_codes,
-            })
+                "t1_hit": code in t1_zt_codes,
+            }
+            t0_price = r.get("price")
+            t1_open  = t1_opens.get(code)
+            t2_open  = t2_opens.get(code)
+
+            if t0_price and t1_open:
+                t0_p = float(t0_price)
+                record["t1_prem"] = round((t1_open - t0_p) / t0_p * 100, 2)
+                if t2_open:
+                    record["t2_ret"] = round((t2_open - t1_open) / t1_open * 100, 2)
+
+            all_records.append(record)
 
     if not all_records:
         return {"window": window, "total": 0}
 
+    # ── Aggregate helper ─────────────────────────────────────────────
     def agg(recs: list) -> dict:
         n = len(recs)
-        hits = sum(1 for r in recs if r["t1_hit"])
-        return {"n": n, "t1_zt_rate": round(hits / n * 100, 1)}
+        hits = sum(1 for r in recs if r.get("t1_hit"))
+        out: dict = {"n": n, "t1_zt_rate": round(hits / n * 100, 1)}
+
+        prems = [r["t1_prem"] for r in recs if "t1_prem" in r]
+        rets  = [r["t2_ret"]  for r in recs if "t2_ret"  in r]
+        if prems:
+            out["t1_prem_mean"] = round(sum(prems) / len(prems), 2)
+        if rets:
+            wins = sum(1 for x in rets if x > 0)
+            out["t2_win_rate"] = round(wins / len(rets) * 100, 1)
+            out["t2_ret_mean"] = round(sum(rets) / len(rets), 2)
+            out["t2_n"]        = len(rets)
+        return out
 
     ORDER = {
         "seal":   ["竞价", "早盘", "盘中"],
@@ -728,25 +846,21 @@ async def compute_feature_backtest(anchor_date: str, window: int = 20) -> dict:
         groups: dict[str, list] = defaultdict(list)
         for r in all_records:
             groups[r[key]].append(r)
-        return [
-            {"label": k, **agg(groups[k])}
-            for k in ORDER[key] if k in groups
-        ]
+        return [{"label": k, **agg(groups[k])} for k in ORDER[key] if k in groups]
 
-    # Cross-dimension table "seal|consec" → stats (for per-stock lookup in UI)
     cross_groups: dict[str, list] = defaultdict(list)
     for r in all_records:
         cross_groups[f"{r['seal']}|{r['consec']}"].append(r)
     cross = {k: agg(v) for k, v in cross_groups.items()}
 
     return {
-        "window":       window,
-        "anchor_date":  anchor_date,
-        "total":        len(all_records),
-        "date_from":    pairs[0][0],
-        "date_to":      pairs[-1][0],
-        "by_seal":      build_dim("seal"),
-        "by_consec":    build_dim("consec"),
-        "by_breaks":    build_dim("breaks"),
-        "cross":        cross,
+        "window":      window,
+        "anchor_date": anchor_date,
+        "total":       len(all_records),
+        "date_from":   triples[0][0],
+        "date_to":     triples[-1][0],
+        "by_seal":     build_dim("seal"),
+        "by_consec":   build_dim("consec"),
+        "by_breaks":   build_dim("breaks"),
+        "cross":       cross,
     }
