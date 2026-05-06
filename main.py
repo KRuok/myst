@@ -172,11 +172,13 @@ async def nextday_stats_endpoint(date: str):
 async def kline_data(code: str, date: str, days: int = Query(default=40, ge=10, le=120)):
     if not is_trading_date(date):
         raise HTTPException(status_code=400, detail={"error": "not_a_trading_date"})
+    error = None
     try:
         data = await fetch_stock_kline(code, date, days)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    return {"code": code, "date": date, "kline": data}
+        error = str(e)
+        data = []
+    return {"code": code, "date": date, "kline": data, "error": error}
 
 
 @app.get("/api/tier-promotion/{date}")

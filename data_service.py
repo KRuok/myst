@@ -510,6 +510,13 @@ async def compute_nextday_stats(date_str: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _fetch_kline_sync(code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    # Beijing Stock Exchange stocks (8xxxxx, 43xxxx) use a different API
+    if code.startswith("8") or code.startswith("43"):
+        return ak.stock_bj_a_hist(
+            symbol=code, period="daily",
+            start_date=start_date, end_date=end_date,
+            adjust="qfq",
+        )
     return ak.stock_zh_a_hist(
         symbol=code,
         period="daily",
@@ -521,6 +528,12 @@ def _fetch_kline_sync(code: str, start_date: str, end_date: str) -> pd.DataFrame
 
 def _fetch_opens_sync(code: str, start_date: str, end_date: str) -> pd.DataFrame:
     """Raw (unadjusted) OHLCV — used so open prices are comparable to ZT pool limit prices."""
+    if code.startswith("8") or code.startswith("43"):
+        return ak.stock_bj_a_hist(
+            symbol=code, period="daily",
+            start_date=start_date, end_date=end_date,
+            adjust="",
+        )
     return ak.stock_zh_a_hist(
         symbol=code, period="daily",
         start_date=start_date, end_date=end_date,
@@ -540,27 +553,33 @@ async def fetch_stock_kline(code: str, anchor_date: str, days: int = 40) -> list
             _run_sync(_fetch_kline_sync, code, start_date, anchor_date),
             timeout=25,
         )
+    except asyncio.TimeoutError:
+        raise RuntimeError("请求超时，请稍后重试")
     except Exception as e:
         logger.error("Failed to fetch kline for %s: %s", code, e)
-        return []
+        raise RuntimeError(f"数据获取失败：{e}")
 
     if df is None or df.empty:
         return []
 
     records = []
+    skipped = 0
     for _, row in df.iterrows():
         try:
+            pct_raw = row.get("涨跌幅")
             records.append({
-                "date": str(row["日期"]).replace("-", ""),
-                "open":  float(row["开盘"]),
-                "high":  float(row["最高"]),
-                "low":   float(row["最低"]),
-                "close": float(row["收盘"]),
+                "date":   str(row["日期"]).replace("-", ""),
+                "open":   float(row["开盘"]),
+                "high":   float(row["最高"]),
+                "low":    float(row["最低"]),
+                "close":  float(row["收盘"]),
                 "volume": int(row["成交量"]),
-                "pct":   float(row.get("涨跌幅", 0)),
+                "pct":    float(pct_raw) if pct_raw is not None else 0.0,
             })
         except Exception:
-            continue
+            skipped += 1
+    if skipped:
+        logger.warning("kline %s: skipped %d malformed rows", code, skipped)
     return records
 
 

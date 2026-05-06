@@ -766,7 +766,8 @@ async function loadKlineChart(code) {
     document.getElementById('kline-loading').classList.add('hidden');
 
     if (!data.kline?.length) {
-      container.innerHTML = '<div style="padding:20px;color:var(--text-secondary)">K线数据暂无</div>';
+      const reason = data.error ? `：${data.error}` : '';
+      container.innerHTML = `<div style="padding:20px;color:var(--text-secondary)">K线数据暂无${reason}</div>`;
       return;
     }
 
