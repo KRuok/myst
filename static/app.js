@@ -1066,9 +1066,10 @@ function loadWencai(code, name) {
   label.textContent = `${name}（${code}）`;
 
   // Build query and URLs
-  const query   = encodeURIComponent(`${name}(${code})`);
-  const proxyUrl  = `/proxy/wencai/unifiedwh/typestock/result?w=${query}&queryType=0&readType=2`;
-  const directUrl = `https://www.iwencai.com/unifiedwh/typestock/result?w=${query}&queryType=0&readType=2`;
+  const query   = encodeURIComponent(name || code);
+  const sign    = Date.now();
+  const proxyUrl  = `/proxy/wencai/screener/result?w=${query}&querytype=stock&sign=${sign}`;
+  const directUrl = `https://www.iwencai.com/screener/result?w=${query}&querytype=stock&sign=${sign}`;
   extLink.href = directUrl;
 
   loading.classList.remove('hidden');
