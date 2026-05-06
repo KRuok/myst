@@ -27,6 +27,7 @@ from data_service import (
     fetch_stock_kline,
     compute_tier_promotion_stats,
     compute_feature_backtest,
+    compute_zt_trend,
     warm_zt_cache,
 )
 
@@ -200,6 +201,17 @@ async def feature_backtest_endpoint(
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     return data
+
+
+@app.get("/api/zt-trend/{date}")
+async def zt_trend_endpoint(date: str):
+    if not is_trading_date(date):
+        raise HTTPException(status_code=400, detail={"error": "not_a_trading_date"})
+    try:
+        records = await compute_zt_trend(date)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"date": date, "records": records}
 
 
 @app.get("/api/cache-status")

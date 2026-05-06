@@ -864,3 +864,117 @@ async def compute_feature_backtest(anchor_date: str, window: int = 20) -> dict:
         "by_breaks":   build_dim("breaks"),
         "cross":       cross,
     }
+
+
+# ---------------------------------------------------------------------------
+# ZT pool trend scoring (medium-short term, independent dimension)
+# ---------------------------------------------------------------------------
+
+async def compute_zt_trend(date: str) -> list[dict]:
+    """Compute trend scores for every stock in the ZT pool on `date`.
+
+    Score (0-100):
+      MA alignment (MA5>MA10>MA20)  → up to +35
+      Price above MA20              → up to +20
+      Higher-High structure (10d)   → up to +25
+      Volume expansion (5d vs 20d)  → up to +20
+
+    Labels: 上升 (≥70) / 震荡 (40-69) / 下降 (<40)
+    """
+    cache_path = _cache_path(date, prefix="trend")
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path) as f:
+                cached = json.load(f)
+            if _is_cache_valid(cached, date):
+                return cached.get("records", [])
+        except Exception:
+            pass
+
+    records = await fetch_zt_data(date)
+    if not records:
+        return []
+
+    date_list = get_previous_n_trading_dates(date, 30)
+    if not date_list:
+        return []
+    start_date = date_list[0]
+
+    sem = asyncio.Semaphore(MAX_PARALLEL_FETCHES)
+
+    async def fetch_one(code: str):
+        async with sem:
+            try:
+                df = await asyncio.wait_for(
+                    _run_sync(_fetch_kline_sync, code, start_date, date),
+                    timeout=20,
+                )
+                return code, df
+            except Exception as e:
+                logger.warning("Trend kline failed %s: %s", code, e)
+                return code, None
+
+    results = await asyncio.gather(*[fetch_one(r["code"]) for r in records])
+
+    trend_records = []
+    for code, df in results:
+        if df is None or df.empty or len(df) < 10:
+            trend_records.append({"code": code, "trend_score": 50, "trend_label": "震荡"})
+            continue
+
+        closes  = [float(v) for v in df["收盘"].tolist()]
+        volumes = [float(v) for v in df["成交量"].tolist()]
+
+        def ma(n: int) -> float | None:
+            return sum(closes[-n:]) / n if len(closes) >= n else None
+
+        ma5, ma10, ma20 = ma(5), ma(10), ma(20)
+        score = 0
+
+        # MA alignment
+        if ma5 and ma10 and ma20:
+            if ma5 > ma10 > ma20:
+                score += 35
+            elif ma5 > ma20:
+                score += 15
+        elif ma5 and ma10 and ma5 > ma10:
+            score += 20
+
+        # Price vs MA20
+        if ma20 and closes[-1] > ma20:
+            score += 20
+        elif ma5 and closes[-1] > ma5:
+            score += 10
+
+        # Higher-High: avg of last 3 closes vs avg of closes[−13:−8]
+        if len(closes) >= 13:
+            recent  = sum(closes[-3:]) / 3
+            earlier = sum(closes[-13:-8]) / 5
+            if recent > earlier * 1.01:
+                score += 25
+            elif recent > earlier:
+                score += 12
+
+        # Volume expansion
+        if len(volumes) >= 20:
+            vol5  = sum(volumes[-5:]) / 5
+            vol20 = sum(volumes[-20:]) / 20
+            if vol5 > vol20 * 1.1:
+                score += 20
+            elif vol5 > vol20:
+                score += 10
+
+        label = "上升" if score >= 70 else "震荡" if score >= 40 else "下降"
+        trend_records.append({"code": code, "trend_score": score, "trend_label": label})
+
+    try:
+        with open(cache_path, "w") as f:
+            json.dump({
+                "date": date,
+                "fetched_at": datetime.datetime.now().isoformat(),
+                "records": trend_records,
+            }, f)
+    except Exception as e:
+        logger.warning("Failed to save trend cache for %s: %s", date, e)
+
+    return trend_records

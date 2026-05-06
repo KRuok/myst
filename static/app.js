@@ -10,6 +10,8 @@ let auctionOnly  = false;
 let capFilter    = 'all';          // Feature 4: market cap tier
 let leaderCodes  = new Set();      // Feature 6: leader detection
 let backtestCross = null;          // cross-dim lookup from rolling backtest
+let trendData    = {};             // code → {trend_score, trend_label}
+let trendFilter  = 'all';         // 'all' | '上升' | '震荡' | '下降'
 let strongLoaded = false;
 let analysisLoadedFor = '';
 
@@ -187,6 +189,7 @@ async function loadData(dateStr) {
   strongLoaded = false;
   analysisLoadedFor = '';
   backtestCross = null;
+  trendData = {};
 
   setLoading(true);
   document.getElementById('status-msg').textContent = '';
@@ -228,6 +231,7 @@ async function loadData(dateStr) {
   renderTiers(data.tiers || []);
   populateIndustryFilter();
   renderTable();
+  loadTrendData(dateStr);  // background, non-blocking
 
   if (document.querySelector('.tab-btn[data-tab="analysis"]').classList.contains('active'))
     maybeLoadAnalysis();
@@ -311,6 +315,10 @@ function getFilteredSorted() {
     if (auctionOnly && !isAuction(r.first_time)) return false;
     // Feature 4: market cap filter
     if (capFilter !== 'all' && capTier(r.circ_cap) !== capFilter) return false;
+    if (trendFilter !== 'all') {
+      const td = trendData[r.code];
+      if (!td || td.trend_label !== trendFilter) return false;
+    }
     if (tierFilter !== 'all') {
       const bucket = (r.consecutive||1) >= 5 ? 5 : (r.consecutive||1);
       if (bucket !== tierFilter) return false;
@@ -320,8 +328,15 @@ function getFilteredSorted() {
 
   const { col, dir } = sortState;
   rows.sort((a, b) => {
-    const va = col === 'first_time' ? parseInt(a[col]||'999999') : (parseFloat(a[col])||0);
-    const vb = col === 'first_time' ? parseInt(b[col]||'999999') : (parseFloat(b[col])||0);
+    let va, vb;
+    if (col === 'first_time') {
+      va = parseInt(a[col]||'999999'); vb = parseInt(b[col]||'999999');
+    } else if (col === 'trend_score') {
+      va = (trendData[a.code]?.trend_score ?? -1);
+      vb = (trendData[b.code]?.trend_score ?? -1);
+    } else {
+      va = parseFloat(a[col]) || 0; vb = parseFloat(b[col]) || 0;
+    }
     return dir === 'asc' ? va - vb : vb - va;
   });
   return rows;
@@ -404,6 +419,12 @@ function renderTable() {
       ${histCell(r.week2_count,10)}
       ${histCell(r.week3_count,15)}
       ${histCell(r.month1_count,20)}
+      <td>${(() => {
+        const td = trendData[r.code];
+        if (!td) return '<span class="trend-badge trend-pending">…</span>';
+        const cls = td.trend_label === '上升' ? 'trend-up' : td.trend_label === '下降' ? 'trend-down' : 'trend-neutral';
+        return `<span class="trend-badge ${cls}">${td.trend_label} ${td.trend_score}</span>`;
+      })()}</td>
     `;
 
     tr.addEventListener('click', e => {
@@ -436,7 +457,7 @@ function setupSorting() {
       } else {
         sortState.col = col;
         sortState.dir = ['score','volume','seal_fund','turnover','consecutive',
-                         'week1_count','week2_count','week3_count','month1_count']
+                         'week1_count','week2_count','week3_count','month1_count','trend_score']
           .includes(col) ? 'desc' : 'asc';
       }
       updateSortHeaders(); renderTable();
@@ -478,6 +499,16 @@ function setupFilters() {
     });
   });
 
+  // Trend filter pills
+  document.querySelectorAll('.trend-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.trend-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      trendFilter = btn.dataset.trend;
+      renderTable();
+    });
+  });
+
   document.getElementById('load-btn').addEventListener('click', () => {
     const picked = document.getElementById('date-picker').value.replace(/-/g, '');
     if (picked) loadData(picked);
@@ -485,6 +516,24 @@ function setupFilters() {
   document.getElementById('date-picker').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('load-btn').click();
   });
+}
+
+// ─────────────────────────────────────────────────────────────────
+// TREND DATA (lazy, background load)
+// ─────────────────────────────────────────────────────────────────
+async function loadTrendData(dateStr) {
+  const msg = document.getElementById('trend-loading-msg');
+  msg.classList.remove('hidden');
+  try {
+    const data = await fetch(`/api/zt-trend/${dateStr}`).then(r => r.json());
+    trendData = {};
+    (data.records || []).forEach(r => { trendData[r.code] = r; });
+    renderTable();
+  } catch (e) {
+    // silently fail — trend column shows "…" until data arrives
+  } finally {
+    msg.classList.add('hidden');
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────

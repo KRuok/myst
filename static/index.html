@@ -63,6 +63,14 @@
       <button class="cap-btn" data-cap="large">大盘&gt;200亿</button>
     </div>
     <label class="check-label"><input type="checkbox" id="hide-consecutive" /> 隐藏连板股</label>
+    <div class="trend-filters">
+      <span class="trend-filter-label">趋势：</span>
+      <button class="trend-btn active" data-trend="all">全部</button>
+      <button class="trend-btn" data-trend="上升">↑ 上升</button>
+      <button class="trend-btn" data-trend="震荡">― 震荡</button>
+      <button class="trend-btn" data-trend="下降">↓ 下降</button>
+      <span id="trend-loading-msg" class="trend-loading-msg hidden">趋势加载中…</span>
+    </div>
     <span id="count-display" class="count-display"></span>
   </section>
 
@@ -90,6 +98,7 @@
           <th data-col="week2_count" class="sortable">近两周</th>
           <th data-col="week3_count" class="sortable">近三周</th>
           <th data-col="month1_count" class="sortable">近一月</th>
+          <th data-col="trend_score" class="sortable">趋势</th>
         </tr>
       </thead>
       <tbody id="zt-tbody"></tbody>
