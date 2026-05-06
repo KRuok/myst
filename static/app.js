@@ -1067,8 +1067,8 @@ function loadWencai(code, name) {
 
   // Build query and URLs
   const query   = encodeURIComponent(`${name}(${code})`);
-  const proxyUrl  = `/proxy/wencai/unifiedwh/stockpicker/result?w=${query}&queryType=0`;
-  const directUrl = `https://www.iwencai.com/unifiedwh/stockpicker/result?w=${query}&queryType=0`;
+  const proxyUrl  = `/proxy/wencai/unifiedwh/typestock/result?w=${query}&queryType=0&readType=2`;
+  const directUrl = `https://www.iwencai.com/unifiedwh/typestock/result?w=${query}&queryType=0&readType=2`;
   extLink.href = directUrl;
 
   loading.classList.remove('hidden');
