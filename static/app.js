@@ -763,9 +763,9 @@ async function openStockModal(code, name) {
   // Reset wencai
   wencaiLoaded = false;
   document.getElementById('wencai-loading').classList.remove('hidden');
-  document.getElementById('wencai-unavailable').classList.add('hidden');
-  document.getElementById('wencai-content').classList.add('hidden');
-  document.getElementById('wencai-content').innerHTML = '';
+  document.getElementById('wencai-iframe').src = 'about:blank';
+  document.getElementById('wencai-iframe').classList.add('hidden');
+  document.getElementById('wencai-error').classList.add('hidden');
 
   // Load both in parallel
   loadKlineChart(code);
@@ -1055,58 +1055,46 @@ async function renderBacktest(data, win) {
 // ─────────────────────────────────────────────────────────────────
 // WENCAI AI
 // ─────────────────────────────────────────────────────────────────
-async function loadWencai(code, name) {
+function loadWencai(code, name) {
   wencaiLoaded = true;
-  const loading    = document.getElementById('wencai-loading');
-  const unavail    = document.getElementById('wencai-unavailable');
-  const content    = document.getElementById('wencai-content');
+  const loading = document.getElementById('wencai-loading');
+  const iframe  = document.getElementById('wencai-iframe');
+  const errDiv  = document.getElementById('wencai-error');
+  const label   = document.getElementById('wencai-stock-label');
+  const extLink = document.getElementById('wencai-open-link');
+
+  label.textContent = `${name}（${code}）`;
+
+  // Build query and URLs
+  const query   = encodeURIComponent(`${name}(${code})`);
+  const proxyUrl  = `/proxy/wencai/unifiedwh/stockpicker/result?w=${query}&queryType=0`;
+  const directUrl = `https://www.iwencai.com/unifiedwh/stockpicker/result?w=${query}&queryType=0`;
+  extLink.href = directUrl;
+
   loading.classList.remove('hidden');
-  try {
-    const data = await fetch(`/api/wencai/${code}?name=${encodeURIComponent(name)}`)
-      .then(r => r.json());
+  iframe.classList.add('hidden');
+  errDiv.classList.add('hidden');
+
+  // Set timeout — if iframe doesn't load in 15s show error
+  const timer = setTimeout(() => {
     loading.classList.add('hidden');
+    errDiv.innerHTML = '加载超时，可能需要在问财登录后重试，或 <a class="wencai-ext-link" href="' + directUrl + '" target="_blank">在新标签打开</a>';
+    errDiv.classList.remove('hidden');
+  }, 15000);
 
-    if (!data.available) {
-      const isNotInstalled = data.reason === 'not_installed';
-      unavail.innerHTML = isNotInstalled
-        ? `<div>问财 AI 功能需要安装 pywencai：</div>
-           <div style="margin-top:8px"><code>pip install pywencai</code></div>
-           <div style="margin-top:8px;font-size:12px">安装后重启应用即可使用</div>`
-        : `<div>问财数据获取失败</div><div style="margin-top:4px;font-size:12px">${data.reason || ''}</div>`;
-      unavail.classList.remove('hidden');
-      return;
-    }
-
-    if (!data.sections?.length) {
-      unavail.innerHTML = '暂无数据';
-      unavail.classList.remove('hidden');
-      return;
-    }
-
-    content.innerHTML = data.sections.map(sec => {
-      if (sec.error) {
-        return `<div class="wencai-section">
-          <div class="wencai-section-title">${sec.title}</div>
-          <div class="wencai-error">${sec.error}</div>
-        </div>`;
-      }
-      const items = sec.items.map(it =>
-        `<div class="wencai-item">
-          <div class="wencai-item-label">${it.label}</div>
-          <div class="wencai-item-value">${it.value}</div>
-        </div>`
-      ).join('');
-      return `<div class="wencai-section">
-        <div class="wencai-section-title">${sec.title}</div>
-        <div class="wencai-grid">${items}</div>
-      </div>`;
-    }).join('');
-    content.classList.remove('hidden');
-  } catch {
+  iframe.onload = () => {
+    clearTimeout(timer);
     loading.classList.add('hidden');
-    unavail.innerHTML = '加载失败，请稍后重试';
-    unavail.classList.remove('hidden');
-  }
+    iframe.classList.remove('hidden');
+  };
+  iframe.onerror = () => {
+    clearTimeout(timer);
+    loading.classList.add('hidden');
+    errDiv.innerHTML = '加载失败，请 <a class="wencai-ext-link" href="' + directUrl + '" target="_blank">在新标签打开</a>';
+    errDiv.classList.remove('hidden');
+  };
+
+  iframe.src = proxyUrl;
 }
 
 // ─────────────────────────────────────────────────────────────────

@@ -1,11 +1,14 @@
 import os
+import re
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+import requests as _req
+
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response as RawResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import CACHE_DIR
@@ -34,6 +37,127 @@ from data_service import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ── Wencai reverse proxy ────────────────────────────────────────────────────
+_WENCAI_ORIGIN = "https://www.iwencai.com"
+_PROXY_PREFIX  = "/proxy/wencai"
+
+# Persistent session keeps Wencai cookies (login state) across requests
+_wencai_session = _req.Session()
+_wencai_session.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+})
+
+_STRIP_HEADERS = {
+    "x-frame-options", "content-security-policy",
+    "content-security-policy-report-only",
+    "transfer-encoding", "content-encoding",
+    "content-length", "connection",
+}
+
+# JS injected into every proxied HTML page.
+# Rewrites fetch() / XHR so the SPA's API calls go through our proxy instead
+# of directly to iwencai.com (which would be CORS-blocked from our origin).
+_PROXY_JS = r"""<script>
+(function(){
+  var O='https://www.iwencai.com',P='/proxy/wencai';
+  function rw(u){
+    if(typeof u!=='string')return u;
+    if(u.startsWith(O))return P+u.slice(O.length)||P+'/';
+    if(u.startsWith('//www.iwencai.com'))return P+u.slice('//www.iwencai.com'.length);
+    return u;
+  }
+  var _f=window.fetch;
+  window.fetch=function(i,o){return _f.call(this,typeof i==='string'?rw(i):i,o);};
+  var _x=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(m,u){
+    return _x.apply(this,[m,rw(u)].concat([].slice.call(arguments,2)));
+  };
+})();
+</script>"""
+
+
+def _rewrite_html(html: str) -> str:
+    """Inject base href + JS interceptor; rewrite static attribute URLs."""
+    # base href routes relative paths through our proxy
+    inject = (
+        f'<base href="{_PROXY_PREFIX}/">'
+        '<meta name="referrer" content="no-referrer">'
+        + _PROXY_JS
+    )
+    if "<head>" in html:
+        html = html.replace("<head>", "<head>" + inject, 1)
+    elif re.search(r"<head[\s>]", html):
+        html = re.sub(r"(<head[^>]*>)", r"\1" + inject, html, count=1)
+    else:
+        html = inject + html
+
+    # Rewrite absolute Wencai URLs in HTML attribute values
+    html = html.replace(f'="{_WENCAI_ORIGIN}/', f'="{_PROXY_PREFIX}/')
+    html = html.replace(f"='{_WENCAI_ORIGIN}/", f"='{_PROXY_PREFIX}/")
+    return html
+
+
+def _sync_proxy(method: str, url: str, req_headers: dict,
+                cookies: dict, body: bytes) -> _req.Response:
+    return _wencai_session.request(
+        method, url,
+        headers=req_headers, cookies=cookies,
+        data=body if method in ("POST", "PUT", "PATCH") else None,
+        timeout=20, allow_redirects=True, stream=False,
+    )
+
+
+async def _proxy(path: str, request: Request) -> RawResponse:
+    qs = str(request.url.query)
+    target = f"{_WENCAI_ORIGIN}/{path}" + (f"?{qs}" if qs else "")
+
+    method  = request.method
+    body    = await request.body()
+    cookies = dict(request.cookies)
+    req_headers = {
+        "Accept":          request.headers.get("accept", "text/html,*/*"),
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Referer":         _WENCAI_ORIGIN + "/",
+        "X-Requested-With": request.headers.get("x-requested-with", ""),
+        "Content-Type":    request.headers.get("content-type", ""),
+    }
+
+    try:
+        resp = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _sync_proxy(method, target, req_headers, cookies, body)
+        )
+    except Exception as exc:
+        logger.error("Wencai proxy error %s: %s", target, exc)
+        return RawResponse(
+            content=f"<html><body style='font:14px sans-serif;padding:20px'>"
+                    f"<b>代理请求失败</b><br>{exc}</body></html>".encode(),
+            status_code=502, media_type="text/html; charset=utf-8",
+        )
+
+    ct = resp.headers.get("content-type", "")
+    if "text/html" in ct:
+        content    = _rewrite_html(resp.text).encode("utf-8")
+        media_type = "text/html; charset=utf-8"
+    else:
+        content    = resp.content
+        media_type = ct or "application/octet-stream"
+
+    out_headers: dict[str, str] = {}
+    for k, v in resp.headers.items():
+        if k.lower() not in _STRIP_HEADERS:
+            out_headers[k] = v
+
+    return RawResponse(
+        content=content, status_code=resp.status_code,
+        headers=out_headers, media_type=media_type,
+    )
+# ───────────────────────────────────────────────────────────────────────────
 
 
 @asynccontextmanager
@@ -224,6 +348,16 @@ async def zt_trend_endpoint(date: str):
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"date": date, "records": records}
+
+
+@app.api_route("/proxy/wencai", methods=["GET", "POST", "HEAD"])
+async def proxy_wencai_root(request: Request):
+    return await _proxy("", request)
+
+
+@app.api_route("/proxy/wencai/{path:path}", methods=["GET", "POST", "HEAD"])
+async def proxy_wencai_path(path: str, request: Request):
+    return await _proxy(path, request)
 
 
 @app.get("/api/cache-status")

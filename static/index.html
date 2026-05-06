@@ -227,9 +227,13 @@
 
       <!-- 问财AI tab -->
       <div id="modal-tab-wencai" class="modal-tab-pane hidden">
+        <div class="wencai-toolbar">
+          <span id="wencai-stock-label" class="wencai-stock-label"></span>
+          <a id="wencai-open-link" class="wencai-ext-link" href="#" target="_blank" rel="noopener">在问财中打开 ↗</a>
+        </div>
         <div id="wencai-loading" class="section-loading">加载中…</div>
-        <div id="wencai-unavailable" class="wencai-unavailable hidden"></div>
-        <div id="wencai-content" class="wencai-content hidden"></div>
+        <iframe id="wencai-iframe" class="wencai-iframe hidden" frameborder="0" allowfullscreen></iframe>
+        <div id="wencai-error" class="wencai-unavailable hidden"></div>
       </div>
     </div>
   </div>
