@@ -204,6 +204,7 @@
       <div class="modal-tab-nav">
         <button class="modal-tab-btn active" data-modal-tab="kline">K线图</button>
         <button class="modal-tab-btn" data-modal-tab="timeline">涨停时间轴</button>
+        <button class="modal-tab-btn" data-modal-tab="wencai">问财AI</button>
       </div>
 
       <!-- K线图 tab -->
@@ -222,6 +223,13 @@
         <div id="timeline-loading" class="section-loading hidden">加载中…</div>
         <div id="timeline-grid" class="timeline-grid"></div>
         <div id="timeline-stats" class="timeline-stats"></div>
+      </div>
+
+      <!-- 问财AI tab -->
+      <div id="modal-tab-wencai" class="modal-tab-pane hidden">
+        <div id="wencai-loading" class="section-loading">加载中…</div>
+        <div id="wencai-unavailable" class="wencai-unavailable hidden"></div>
+        <div id="wencai-content" class="wencai-content hidden"></div>
       </div>
     </div>
   </div>

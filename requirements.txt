@@ -3,3 +3,4 @@ uvicorn[standard]>=0.20.0
 akshare>=1.10.0
 pandas>=2.0.0
 python-multipart
+pywencai

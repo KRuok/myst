@@ -1017,3 +1017,99 @@ async def compute_zt_trend(date: str) -> list[dict]:
         logger.warning("Failed to save trend cache for %s: %s", date, e)
 
     return trend_records
+
+
+# ---------------------------------------------------------------------------
+# Wencai (问财) AI stock analysis
+# ---------------------------------------------------------------------------
+
+def _wencai_query_sync(query: str) -> "pd.DataFrame | None":
+    import pywencai
+    return pywencai.get(query=query, query_type="stock", perpage=10, page=1)
+
+
+def _find_stock_row(df: "pd.DataFrame", code: str) -> "pd.Series | None":
+    """Return the row that matches `code` from a pywencai result DataFrame."""
+    for col in df.columns:
+        if "代码" in str(col):
+            mask = df[col].astype(str).str.contains(code, regex=False)
+            if mask.any():
+                return df[mask].iloc[0]
+    return df.iloc[0] if not df.empty else None
+
+
+def _row_to_items(row: "pd.Series") -> list[dict]:
+    skip = {"股票代码", "代码", "股票简称", "简称", "名称"}
+    items = []
+    for col, val in row.items():
+        label = str(col)
+        if label in skip:
+            continue
+        # strip trailing date suffixes like "[2026-05-06]"
+        label = label.split("[")[0].strip()
+        val_str = str(val)
+        if val_str in ("nan", "None", "--", ""):
+            continue
+        # try to format numbers
+        try:
+            f = float(val)
+            if abs(f) >= 1e8:
+                val_str = f"{f/1e8:.2f}亿"
+            elif abs(f) >= 1e4:
+                val_str = f"{f/1e4:.2f}万"
+            elif f == int(f):
+                val_str = str(int(f))
+            else:
+                val_str = f"{f:.4g}"
+        except (ValueError, TypeError):
+            pass
+        items.append({"label": label, "value": val_str})
+    return items
+
+
+async def fetch_wencai_data(code: str, name: str) -> dict:
+    """Query Wencai for structured analysis of a single stock.
+
+    Returns {"available": False, "reason": "..."} when pywencai is not installed
+    or the request fails, so the frontend can show a graceful fallback.
+    """
+    try:
+        import pywencai  # noqa: F401
+    except ImportError:
+        return {
+            "available": False,
+            "reason": "not_installed",
+            "hint": "pip install pywencai",
+        }
+
+    stock_ref = f"{name}({code})" if name else code
+
+    query_groups = [
+        ("基本信息", f"{stock_ref} 最新价 涨跌幅 市盈率TTM 市净率 总市值 流通市值 所属行业"),
+        ("资金动向", f"{stock_ref} 今日主力净流入 今日超大单净流入 今日大单净流入 今日散户净流入"),
+        ("近期表现", f"{stock_ref} 5日涨跌幅 10日涨跌幅 20日涨跌幅 60日涨跌幅"),
+    ]
+
+    sections = []
+    for title, query in query_groups:
+        try:
+            df = await asyncio.wait_for(
+                _run_sync(_wencai_query_sync, query),
+                timeout=15,
+            )
+            if df is None or df.empty:
+                continue
+            row = _find_stock_row(df, code)
+            if row is None:
+                continue
+            items = _row_to_items(row)
+            if items:
+                sections.append({"title": title, "items": items})
+        except asyncio.TimeoutError:
+            sections.append({"title": title, "error": "请求超时"})
+        except Exception as e:
+            logger.warning("Wencai query [%s] failed: %s", title, e)
+            sections.append({"title": title, "error": str(e)})
+        await asyncio.sleep(0.3)
+
+    return {"available": True, "code": code, "name": name, "sections": sections}

@@ -18,6 +18,7 @@ let analysisLoadedFor = '';
 let trendChartInst  = null;
 let sectorChartInst = null;
 let klineChart      = null;        // Feature 7: lightweight-charts instance
+let wencaiLoaded    = false;       // track whether wencai tab has been fetched
 
 // ─────────────────────────────────────────────────────────────────
 // FORMATTERS
@@ -722,6 +723,11 @@ function setupModal() {
       document.querySelectorAll('.modal-tab-pane').forEach(p => p.classList.add('hidden'));
       btn.classList.add('active');
       document.getElementById(`modal-tab-${btn.dataset.modalTab}`).classList.remove('hidden');
+      if (btn.dataset.modalTab === 'wencai' && !wencaiLoaded) {
+        const code = document.getElementById('modal-code').textContent;
+        const name = document.getElementById('modal-name').textContent;
+        loadWencai(code, name);
+      }
     });
   });
 }
@@ -753,6 +759,13 @@ async function openStockModal(code, name) {
   document.getElementById('timeline-loading').classList.remove('hidden');
   document.getElementById('timeline-grid').innerHTML = '';
   document.getElementById('timeline-stats').innerHTML = '';
+
+  // Reset wencai
+  wencaiLoaded = false;
+  document.getElementById('wencai-loading').classList.remove('hidden');
+  document.getElementById('wencai-unavailable').classList.add('hidden');
+  document.getElementById('wencai-content').classList.add('hidden');
+  document.getElementById('wencai-content').innerHTML = '';
 
   // Load both in parallel
   loadKlineChart(code);
@@ -1037,6 +1050,63 @@ async function renderBacktest(data, win) {
 
   // Re-render main table to show predicted rates
   renderTable();
+}
+
+// ─────────────────────────────────────────────────────────────────
+// WENCAI AI
+// ─────────────────────────────────────────────────────────────────
+async function loadWencai(code, name) {
+  wencaiLoaded = true;
+  const loading    = document.getElementById('wencai-loading');
+  const unavail    = document.getElementById('wencai-unavailable');
+  const content    = document.getElementById('wencai-content');
+  loading.classList.remove('hidden');
+  try {
+    const data = await fetch(`/api/wencai/${code}?name=${encodeURIComponent(name)}`)
+      .then(r => r.json());
+    loading.classList.add('hidden');
+
+    if (!data.available) {
+      const isNotInstalled = data.reason === 'not_installed';
+      unavail.innerHTML = isNotInstalled
+        ? `<div>问财 AI 功能需要安装 pywencai：</div>
+           <div style="margin-top:8px"><code>pip install pywencai</code></div>
+           <div style="margin-top:8px;font-size:12px">安装后重启应用即可使用</div>`
+        : `<div>问财数据获取失败</div><div style="margin-top:4px;font-size:12px">${data.reason || ''}</div>`;
+      unavail.classList.remove('hidden');
+      return;
+    }
+
+    if (!data.sections?.length) {
+      unavail.innerHTML = '暂无数据';
+      unavail.classList.remove('hidden');
+      return;
+    }
+
+    content.innerHTML = data.sections.map(sec => {
+      if (sec.error) {
+        return `<div class="wencai-section">
+          <div class="wencai-section-title">${sec.title}</div>
+          <div class="wencai-error">${sec.error}</div>
+        </div>`;
+      }
+      const items = sec.items.map(it =>
+        `<div class="wencai-item">
+          <div class="wencai-item-label">${it.label}</div>
+          <div class="wencai-item-value">${it.value}</div>
+        </div>`
+      ).join('');
+      return `<div class="wencai-section">
+        <div class="wencai-section-title">${sec.title}</div>
+        <div class="wencai-grid">${items}</div>
+      </div>`;
+    }).join('');
+    content.classList.remove('hidden');
+  } catch {
+    loading.classList.add('hidden');
+    unavail.innerHTML = '加载失败，请稍后重试';
+    unavail.classList.remove('hidden');
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────

@@ -28,6 +28,7 @@ from data_service import (
     compute_tier_promotion_stats,
     compute_feature_backtest,
     compute_zt_trend,
+    fetch_wencai_data,
     warm_zt_cache,
 )
 
@@ -202,6 +203,15 @@ async def feature_backtest_endpoint(
         data = await compute_feature_backtest(date, window)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
+    return data
+
+
+@app.get("/api/wencai/{code}")
+async def wencai_endpoint(code: str, name: str = Query(default="")):
+    try:
+        data = await fetch_wencai_data(code, name)
+    except Exception as e:
+        data = {"available": False, "reason": str(e)}
     return data
 
 
