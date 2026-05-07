@@ -70,9 +70,21 @@ _STRIP_HEADERS = {
     "content-length", "connection",
 }
 
-# JS injected into every proxied HTML page.
-# Rewrites fetch() / XHR so the SPA's API calls go through our proxy instead
-# of directly to iwencai.com (which would be CORS-blocked from our origin).
+# Injected at the very TOP of the document (before DOCTYPE) so it runs before
+# any page script. Overrides window.top/parent/frameElement so Wencai's
+# frame-busting detection thinks it's running as the top-level window.
+_ANTI_FRAMEBUST = """<script>
+(function(){
+  function def(prop){
+    try{Object.defineProperty(window,prop,{get:function(){return window;},configurable:true});}catch(e){}
+  }
+  def('top'); def('parent');
+  try{Object.defineProperty(window,'frameElement',{get:function(){return null;},configurable:true});}catch(e){}
+})();
+</script>"""
+
+# Injected inside <head>: rewrites fetch()/XHR so SPA API calls go through
+# our proxy instead of hitting iwencai.com directly (which would be CORS-blocked).
 _PROXY_JS = r"""<script>
 (function(){
   var O='https://www.iwencai.com',P='/proxy/wencai';
@@ -93,8 +105,11 @@ _PROXY_JS = r"""<script>
 
 
 def _rewrite_html(html: str) -> str:
-    """Inject base href + JS interceptor; rewrite static attribute URLs."""
-    # base href routes relative paths through our proxy
+    """Inject frame-bust override at document start, then base href + interceptor in <head>."""
+    # 1. Prepend anti-frame-bust before anything else (beats early-running page scripts)
+    html = _ANTI_FRAMEBUST + html
+
+    # 2. Inject base href + fetch/XHR interceptor inside <head>
     inject = (
         f'<base href="{_PROXY_PREFIX}/">'
         '<meta name="referrer" content="no-referrer">'
@@ -104,10 +119,8 @@ def _rewrite_html(html: str) -> str:
         html = html.replace("<head>", "<head>" + inject, 1)
     elif re.search(r"<head[\s>]", html):
         html = re.sub(r"(<head[^>]*>)", r"\1" + inject, html, count=1)
-    else:
-        html = inject + html
 
-    # Rewrite absolute Wencai URLs in HTML attribute values
+    # 3. Rewrite absolute Wencai URLs in HTML attribute values
     html = html.replace(f'="{_WENCAI_ORIGIN}/', f'="{_PROXY_PREFIX}/')
     html = html.replace(f"='{_WENCAI_ORIGIN}/", f"='{_PROXY_PREFIX}/")
     return html
